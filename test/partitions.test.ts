@@ -3,6 +3,17 @@ import test from 'node:test';
 import { memorySelector, searchSchema, writeSchema } from '../src/validation.js';
 import { namespaceSchema } from '../src/scope.js';
 
+test('分区总览 key 规范化并要求长期有效，普通事实支持有效期', () => {
+  const input = { namespace: 'projects/homelab', key: 'ｏｖｅｒｖｉｅｗ', type: 'status', verification: 'confirmed',
+    content: '用途：家庭服务。现状：运行中。入口：server.os。', source: { reference: 'synthetic:overview' }, idempotency_key: 'overview' };
+  const overview = writeSchema.parse({ ...input, pinned: false });
+  assert.equal(overview.key, 'overview');
+  assert.equal(overview.expires_at, null);
+  assert.throws(() => writeSchema.parse({ ...input, expires_at: '2030-01-01T00:00:00Z' }));
+  assert.equal(writeSchema.parse({ ...input, key: 'server.os' }).pinned, false);
+  assert.equal(writeSchema.parse({ ...input, key: 'server.os', expires_at: '2030-01-01T00:00:00Z' }).expires_at, '2030-01-01T00:00:00Z');
+});
+
 test('分区字段必须显式提供，拒绝含糊选择器和非法层级', () => {
   const input = { namespace: 'projects/homelab', key: 'server.os', type: 'decision', verification: 'confirmed',
     content: '采用 Unraid', source: { reference: 'synthetic:partition' }, idempotency_key: 'operation' };

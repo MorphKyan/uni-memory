@@ -45,6 +45,14 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 
 删除输入：`{id,expected_version,idempotency_key}`。删除不可撤销，会清除正文、所有历史与来源，并异步移除所有索引集合内的向量。旧备份到期前可能仍包含被删除内容。
 
+## 分区总览
+
+每个有长期记忆的 namespace 约定一条 `key=overview` 的普通记忆，使用现有读写、历史和删除接口，沿用 `namespace/key` 唯一约束。客户端在首次保存分区事实后创建，在关键内容变化后按版本更新；服务端负责存储与返回，正文由客户端依据事实维护。
+
+写入 overview 时服务自动设置 `pinned=true`，有效期要求 `expires_at=null`；建议 `type=status`，核实状态按正文依据设置。正文包含用途与范围、核心现状、重要记忆 key 和子分区入口，最多 4000 字符。总览作为导航摘要，详细事实以对应原条目为准。
+
+通过 `memory_get({namespace:"projects/homelab",key:"overview"})` 精确读取。`memory_core` 在原有过滤范围内优先返回 overview，再按更新时间返回其他置顶事实，总上限仍为 50。来源与版本历史可通过 get/history 查看。首次接入已有分区时，由客户端读取相关事实后补建总览；用户主动删除的总览仅在允许后重建。
+
 ## 检索与历史
 
 检索示例：
