@@ -6,7 +6,7 @@
 
 为 ChatGPT、OpenClaw、Codex、CodeBuddy 提供个人共享长期记忆。外部共享库是长期记忆的唯一权威来源；客户端负责识别、提交和检索事实，服务端负责校验、存储、索引与版本追踪。
 
-首版已实现，Tower 已部署 0.2.0，局域网 MCP 与本机 Codex CLI、桌面工具调用已通过实测。本地后续代码清理已通过构建和测试，待部署 Tower。
+Tower 已部署 0.2.0 的最新源码（0ea98d1），包含代码清理、分区总览、分区发现、分页列表与状态查询；局域网 MCP、真实模型检索和记忆更新已通过实测。
 
 ## 协作规则
 
@@ -23,7 +23,7 @@
 | 项目 | 当前配置 |
 | --- | --- |
 | 工具链 | TypeScript、Node.js 24 LTS、npm、Node 内置测试；依赖版本锁定于 `package-lock.json` |
-| HTTP 与 MCP | Express、官方 MCP TypeScript SDK；本地 REST 与九个 memory 工具共用业务逻辑，分区发现、分页列表及状态查询待部署 |
+| HTTP 与 MCP | Express、官方 MCP TypeScript SDK；REST 与九个 memory 工具共用业务逻辑，分区发现、分页列表及状态查询均已部署 Tower |
 | 数据库访问 | node-postgres、直接 SQL、版本化 SQL 迁移 |
 | PostgreSQL | 独立 PostgreSQL 18.6，保存事实、历史、来源、幂等记录、Outbox、客户端令牌及 OAuth 状态；内部访问 |
 | Qdrant | 独立 Qdrant 1.19.2，可重建向量索引；保存向量、ID、版本及过滤元数据，正文和来源由 PostgreSQL 保存；内部访问 |
@@ -34,7 +34,7 @@
 | 本机 MCP | `http://192.168.1.200:3100/mcp`，独立 Bearer Token；应用绑定该 LAN 地址，允许私网 HTTP，局域网配置关闭 OAuth；公网接入使用 HTTPS |
 | 公网基础 | IPv6 公网、IPv4 经 EO 代理、复用已有 NPM；项目链路待配置与实测 |
 | 备份 | PostgreSQL 与配置保留 14 天，Tower User Scripts 每日 03:10 执行；Qdrant 从事实重建；备份到期前可能保留已删除内容 |
-| 版本管理 | 本地 Git 仓库，基线为清理前源码；当前仅使用本地仓库，凭据、配置、缓存和备份排除 Git |
+| 版本管理 | Git 仓库，基线为清理前源码；已配置 GitHub origin（MorphKyan/uni-memory），凭据、配置、缓存和备份排除 Git |
 | 可选整理 API | `https://token.sensenova.cn/v1`，OpenAI Compatible Chat Completions；默认关闭，模型和密钥通过环境变量配置 |
 
 ## 记忆与接口规则
@@ -73,17 +73,15 @@ SSH 保持主机指纹验证；HTTP 凭据仅发送至确认的服务地址。�
 
 ## 验证状态与待办
 
-- 记忆库状态：本地新增 memory_status 与 GET /v1/status，沿用 memory:read 和范围过滤；记忆数量按范围统计，依赖、模型、索引任务及版本覆盖率反映整个实例。Worker 上报加载与推理状态，查询不触发推理；无新增依赖或数据库迁移，不添加变化日志。WSL Docker Node.js 24.22.1 构建、17 项单元测试及 21 项真实 PostgreSQL/Qdrant 集成测试通过，涵盖范围过滤、有效期、索引版本、九个 MCP 工具、权限和依赖失败；模型生命周期状态使用合成结果及真实线程未使用/退出验证，未重新运行真实模型推理。Tower 待部署，说明见 docs/api.md。
-
-- 分区发现与完整列表：本地新增 memory_namespaces（可按父路径发现有效分区及直属数量）和 memory_list（复用过滤、按创建时间和 ID 游标分页）；REST/MCP 共用 PostgreSQL 查询，无新增依赖、无分区权限隔离。WSL Docker Node.js 24.22.1 构建、13 项单元测试、20 项真实 PostgreSQL/Qdrant 集成测试通过，涵盖 105 条事实分页、微秒游标、编辑/删除、过滤与八个 MCP 工具发现；复用已安装依赖的测试镜像并挂载当前源码、配置与测试，npm ls 校验直接依赖版本通过。Tower 部署待完成，接口说明见 docs/api.md。
-
-- 分区总览：本地已实现自动置顶、长期有效期校验、core 优先返回及客户端维护规则；WSL Docker Node.js 24.22.1 构建、12 项单元测试、19 项真实 PostgreSQL/Qdrant 集成测试通过。本机 Codex 规则和技能已更新，Tower 部署与既有分区总览补建待完成。
-- 本地：WSL Ubuntu、Node.js 24.22.1 下构建、11 项单元测试、18 项真实 PostgreSQL/Qdrant 集成测试通过。最新清理涵盖事务复用、key 的 NFKC 规范化、索引任务原子登记及真实 CLI 重试验证。
-- Tower：已备份并升级至 0.2.0，保留 28 条原记忆，完成过滤 payload 重建；实际 MCP、Gemma 2 CPU、分区、跨语言检索、冲突历史及备份恢复验收通过，合成验收事实已清理。
+- 记忆库状态：memory_status 与 GET /v1/status 已部署 Tower，沿用 memory:read 和范围过滤；记忆数量按范围统计，依赖、模型、索引任务及版本覆盖率反映整个实例。Worker 上报加载与推理状态，查询不触发推理；无新增依赖或数据库迁移，不添加变化日志。Tower 真实模型推理后状态为 ready/hybrid，接口说明见 docs/api.md。
+- 分区发现与完整列表：memory_namespaces（可按父路径发现有效分区及直属数量）和 memory_list（复用过滤、按创建时间和 ID 游标分页）已部署；REST/MCP 共用 PostgreSQL 查询。Tower 34 条有效记忆分 5 页读取，无重复或遗漏；分区不隔离权限。
+- 分区总览：自动置顶、长期有效期校验、core 优先返回及客户端维护规则已部署并实测。本机 Codex 规则和技能已更新；global 总览已补建，projects/uni-memory 总览与四条相关事实按版本更新，旧 pending 条目仍保留核实标记。
+- 本地：WSL Docker Node.js 24.22.1 下构建、直接依赖版本校验、17 项单元测试与 21 项真实 PostgreSQL/Qdrant 集成测试通过，涵盖代码清理、105 条事实分页、微秒游标、范围与权限、九个 MCP 工具和状态依赖失败。
+- Tower：升级前已备份并保留旧镜像，仅替换 app，PostgreSQL/Qdrant 未重启。原记忆、来源与历史全表数量及内容摘要升级前后一致；九个 MCP 工具、认证/Origin、总览、分页、状态、Gemma 2 CPU 跨语言检索及冲突历史验收通过，三条合成事实已清理。记忆同步后有效条目 34 条（global 30、projects/uni-memory 4），全部版本已索引，排队/失败任务均为 0，总体状态 ok；详见 docs/deployment-2026-10-28.md。
 - 数据迁移：旧记录采用 `global/type=fact/verification=pending`，保留 UUID、key、正文、来源、版本和历史。
 - 模型：2026-10-27 23:36 WSL 测试 Recall@5 100%，查询中位 42.41 ms、P95 52.89 ms、缓存冷启动 3343 ms。报告区分测试设备、模型资源、容器大小和运行内存；Tower 性能与资源预算待量化。
 - 本机凭据：JSON、ACL、全局规则保留、引用式 SSH 与认证 MCP 只读检查通过，详见 `docs/service-access.md`。
-- 后续：部署本地清理版本；完成 HTTPS 域名、NPM 网络和 EO 链路；接入其他三个客户端；验证 Tower 整机开机恢复。可选整理 API 的模型及凭据待用户配置。
+- 后续：完成 HTTPS 域名、NPM 网络和 EO 链路；接入其他三个客户端；验证 Tower 整机开机恢复。可选整理 API 的模型及凭据待用户配置。
 
 ## 详细文档
 
@@ -94,3 +92,4 @@ SSH 保持主机指纹验证；HTTP 凭据仅发送至确认的服务地址。�
 - `docs/operations.md`：备份恢复与日常运维。
 - `docs/api.md`：接口说明。
 - `docs/shared-memory-policy.md`：共享记忆规则。
+- `docs/deployment-2026-10-28.md`：最新 Tower 更新、记忆同步及验收。

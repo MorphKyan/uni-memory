@@ -141,7 +141,7 @@ embedding.state 为 `disabled`（未配置 Worker）、`unloaded`（尚未使用
 
 统计字段来自同一 SQL 快照，外部依赖与 Worker 是各自采样，状态不保证下一次检索成功，也不保证 Qdrant 未在外部被修改。数据库统计失败时 memories/index 为 null，不伪装为零；Qdrant 故障仍保留数据库统计。鉴权也依赖 PostgreSQL，数据库完全不可达时请求可能先在鉴权阶段失败，此时使用 `/healthz` 和 `/readyz` 检查。接口不返回事实正文、来源或详细任务错误；后者继续通过管理员 `/v1/tasks` 查询。
 
-本地实现待部署，升级后客户端须重新发现 MCP 工具。
+2026-10-28 已部署 Tower，并通过真实模型推理后的 ready/hybrid 状态及 REST/MCP 验收；客户端须重新发现 MCP 工具。记录见 [Tower 更新验收](deployment-2026-10-28.md)。
 
 ## 运维与安全
 

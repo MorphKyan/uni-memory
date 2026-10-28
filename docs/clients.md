@@ -4,9 +4,9 @@ Codex 本机全局配置已安装，CLI 已通过 Tower HTTP MCP 的自动保存
 
 ## 通用配置
 
-服务部署新版本后，重新发现 MCP 工具以使用 memory_namespaces 和 memory_list。不知道分区名称时先调用 memory_namespaces({})；浏览指定分区的全部有效记忆时使用 memory_list，保持过滤条件不变并按 next_cursor 翻页。两者沿用 memory:read，分区不隔离客户端权限；详见 [接口说明](api.md#分区发现与完整列表)。
+Tower 已部署九个 MCP 工具，客户端重新发现工具后可使用 memory_namespaces 和 memory_list。不知道分区名称时先调用 memory_namespaces({})；浏览指定分区的全部有效记忆时使用 memory_list，保持过滤条件不变并按 next_cursor 翻页。两者沿用 memory:read，分区不隔离客户端权限；详见 [接口说明](api.md#分区发现与完整列表)。
 
-查询记忆库概况使用 `memory_status({namespaces:["global","projects/uni-memory"]})`，沿用 `memory:read` 和现有范围过滤。记忆数量按范围统计，模型、索引和依赖状态反映整个实例；查询不会启动推理，状态是最近观测。该工具需部署本地新版本后重新发现，详见 [记忆库状态](api.md#记忆库状态)。
+查询记忆库概况使用 `memory_status({namespaces:["global","projects/uni-memory"]})`，沿用 `memory:read` 和现有范围过滤。记忆数量按范围统计，模型、索引和依赖状态反映整个实例；查询不会启动推理，状态是最近观测。该工具已部署 Tower，重新发现后可使用，详见 [记忆库状态](api.md#记忆库状态)。
 
 服务地址为 `https://memory.example.com/mcp`，使用实际域名替换。通过管理 CLI 为 Codex、CodeBuddy、OpenClaw 分别创建令牌：
 
