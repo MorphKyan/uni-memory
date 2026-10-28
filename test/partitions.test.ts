@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { memorySelector, searchSchema, writeSchema } from '../src/validation.js';
+import { memorySelector, searchSchema, writeSchema, namespacesSchema, listSchema, decodeListCursor } from '../src/validation.js';
 import { namespaceSchema } from '../src/scope.js';
+
+test('发现分区与列表严格校验范围、页大小和游标', () => {
+  assert.deepEqual(namespacesSchema.parse({}), {});
+  assert.deepEqual(namespacesSchema.parse({ parent: 'projects/home' }), { parent: 'projects/home' });
+  for (const input of [{ parent: 'projects/' }, { namespaces: ['global'] }]) assert.throws(() => namespacesSchema.parse(input));
+  assert.equal(listSchema.parse({ namespaces: ['global'] }).limit, 50);
+  for (const input of [{}, { namespaces: [] }, { namespaces: ['global'], limit: 101 },
+    { namespaces: ['global'], limit: 0 }, { namespaces: ['global'], query: 'x' },
+    { namespaces: ['global'], cursor: '' }, { namespaces: ['global'], include_descendants: 'false' }]) {
+    assert.throws(() => listSchema.parse(input));
+  }
+  const cursor = { created_at: '2026-10-28T00:00:00.123456Z', id: '319ea735-b71b-442f-92f4-c1e1b35ad09f' };
+  assert.deepEqual(decodeListCursor(Buffer.from(JSON.stringify(cursor)).toString('base64url')), cursor);
+  for (const value of ['not-json', '{}', JSON.stringify({ ...cursor, created_at: 'yesterday' }), JSON.stringify({ ...cursor, id: 'bad' })]) {
+    assert.throws(() => decodeListCursor(Buffer.from(value).toString('base64url')), { code: 'invalid_cursor' });
+  }
+});
 
 test('分区总览 key 规范化并要求长期有效，普通事实支持有效期', () => {
   const input = { namespace: 'projects/homelab', key: 'ｏｖｅｒｖｉｅｗ', type: 'status', verification: 'confirmed',

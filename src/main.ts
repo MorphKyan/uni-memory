@@ -18,7 +18,7 @@ try {
   const qdrant = new Qdrant(cfg);
   embedder = cfg.model ? new EmbeddingWorker(cfg.model as ModelName, process.env.EMBEDDING_DTYPE || undefined, cfg.modelCache) : undefined;
   const provider = cfg.oauthEnabled ? await createOAuth(pool, cfg) : undefined;
-  const app = createApp({ cfg, store, qdrant, search: new Search(store, qdrant, embedder), provider });
+  const app = createApp({ cfg, store, qdrant, search: new Search(store, qdrant, embedder), provider, embedder });
   const indexer = new Indexer(pool, qdrant, embedder);
   const server = app.listen(cfg.port, cfg.host, () => {
     console.log('uni-memory 已启动');

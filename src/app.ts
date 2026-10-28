@@ -11,8 +11,10 @@ import { AppError } from './validation.js';
 import type { Store } from './store.js';
 import type { Search } from './search.js';
 import type { Qdrant } from './qdrant.js';
+import type { Embedder } from './embedding.js';
+import { MemoryStatus } from './status.js';
 
-interface Services { store: Store; search: Search; qdrant: Qdrant; cfg: Config; provider?: Provider }
+interface Services { store: Store; search: Search; qdrant: Qdrant; cfg: Config; provider?: Provider; embedder?: Embedder }
 export function rateLimit(limit: number, windowMs = 60000): RequestHandler {
   const clients = new Map<string, { count: number; until: number }>();
   return (req, res, next) => {
@@ -31,6 +33,7 @@ export function rateLimit(limit: number, windowMs = 60000): RequestHandler {
 export function createApp(services: Services) {
   const app = express();
   const { cfg, store, search, qdrant, provider } = services;
+  const status = new MemoryStatus(store, qdrant, services.embedder);
   app.disable('x-powered-by');
   app.set('query parser', 'simple');
   if (cfg.trustProxy.length) app.set('trust proxy', cfg.trustProxy);
@@ -61,15 +64,19 @@ export function createApp(services: Services) {
   function scope(name: string): RequestHandler {
     return (_req, res, next) => { requireScope(res.locals.identity as Identity, name); next(); };
   }
-  app.get('/v1/memories/core', scope('memory:read'), async (req, res) => {
+  function queryScope(req: express.Request) {
     const input = { ...req.query };
     if (typeof input.namespaces === 'string') input.namespaces = [input.namespaces];
     if (typeof input.tags === 'string') input.tags = [input.tags];
     // GET 参数仅接受明确的 true/false，不将字符串 "false" 转成 true。
-    res.json(await store.core({ ...input, ...(input.include_descendants === 'true' ? { include_descendants: true }
-      : input.include_descendants === 'false' ? { include_descendants: false } : {}) }));
-  });
+    return { ...input, ...(input.include_descendants === 'true' ? { include_descendants: true }
+      : input.include_descendants === 'false' ? { include_descendants: false } : {}) };
+  }
+  app.get('/v1/memories/core', scope('memory:read'), async (req, res) => { res.json(await store.core(queryScope(req))); });
+  app.get('/v1/status', scope('memory:read'), async (req, res) => { res.json(await status.get(queryScope(req))); });
   app.post('/v1/memories/search', scope('memory:read'), async (req, res) => { res.json(await search.search(req.body)); });
+  app.get('/v1/namespaces', scope('memory:read'), async (req, res) => { res.json(await store.namespaces(req.query)); });
+  app.post('/v1/memories/list', scope('memory:read'), async (req, res) => { res.json(await store.list(req.body)); });
   app.get('/v1/memories', scope('memory:read'), async (req, res) => { res.json(await store.get(req.query)); });
   app.get('/v1/memories/history', scope('memory:read'), async (req, res) => { res.json(await store.history(req.query)); });
   app.post('/v1/memories', scope('memory:write'), async (req, res) => {
@@ -84,7 +91,7 @@ export function createApp(services: Services) {
     res.json((await store.pool.query('SELECT memory_id,attempts,failed,available_at,error_code FROM index_jobs ORDER BY available_at LIMIT 100')).rows);
   });
   app.post('/mcp', async (req, res) => {
-    const server = createMcpServer(store, search, res.locals.identity);
+    const server = createMcpServer(store, search, status, res.locals.identity);
     const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     try { await server.connect(transport); await transport.handleRequest(req, res, req.body); }
     finally { await server.close(); }

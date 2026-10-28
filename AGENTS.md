@@ -21,7 +21,7 @@
 | 项目 | 当前配置 |
 | --- | --- |
 | 工具链 | TypeScript、Node.js 24 LTS、npm、Node 内置测试；依赖版本锁定于 `package-lock.json` |
-| HTTP 与 MCP | Express、官方 MCP TypeScript SDK；REST 与六个 memory 工具共用业务逻辑 |
+| HTTP 与 MCP | Express、官方 MCP TypeScript SDK；本地 REST 与九个 memory 工具共用业务逻辑，分区发现、分页列表及状态查询待部署 |
 | 数据库访问 | node-postgres、直接 SQL、版本化 SQL 迁移 |
 | PostgreSQL | 独立 PostgreSQL 18.6，保存事实、历史、来源、幂等记录、Outbox、客户端令牌及 OAuth 状态；内部访问 |
 | Qdrant | 独立 Qdrant 1.19.2，可重建向量索引；保存向量、ID、版本及过滤元数据，正文和来源由 PostgreSQL 保存；内部访问 |

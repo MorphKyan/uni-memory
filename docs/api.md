@@ -10,6 +10,9 @@
 | `GET /v1/memories/history?id=UUID` 或 `?namespace=NS&key=KEY` | memory:read | memory_history |
 | `POST /v1/memories/delete` | memory:write | memory_delete |
 | `GET /v1/memories/core?namespaces=global` | memory:read | memory_core |
+| `GET /v1/namespaces` 或 `?parent=projects` | memory:read | memory_namespaces |
+| `POST /v1/memories/list` | memory:read | memory_list |
+| `GET /v1/status?namespaces=global` | memory:read | memory_status |
 | `GET /v1/tasks` | memory:admin | 不对模型暴露管理工具 |
 
 MCP 使用无状态 Streamable HTTP，`POST /mcp` 返回 JSON；未启用独立 GET SSE 通道，GET/DELETE 返回 405。SDK 客户端以 tools/list、tools/call 使用工具。
@@ -53,6 +56,33 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 
 通过 `memory_get({namespace:"projects/homelab",key:"overview"})` 精确读取。`memory_core` 在原有过滤范围内优先返回 overview，再按更新时间返回其他置顶事实，总上限仍为 50。来源与版本历史可通过 get/history 查看。首次接入已有分区时，由客户端读取相关事实后补建总览；用户主动删除的总览仅在允许后重建。
 
+## 分区发现与完整列表
+
+`memory_namespaces({})` 返回所有包含当前有效记忆的分区及直属条目数，例如：
+
+```json
+{"namespaces":[{"namespace":"global","count":12},{"namespace":"projects/uni-memory","count":20}]}
+```
+
+可传 `{ "parent": "projects" }`，只返回该分区自身及按路径边界匹配的子分区；`projects/home` 不包含 `projects/homelab`。按完整分区名升序返回，count 不累计子分区，包含 overview。分区从 PostgreSQL 当前有效事实汇总，不保留空分区或仅有过期、删除事实的分区，也不虚构没有直属事实的父分区。需要总览时再调用 memory_get。REST 使用 `GET /v1/namespaces?parent=projects`。
+
+`memory_list` 不需要搜索词，不受搜索排名及 core 的 50 条总上限限制；沿用 namespaces/include_descendants/tags/type/verification 过滤。namespaces 必填，默认每页 50 条，limit 为 1–100：
+
+```json
+{
+  "namespaces": ["projects/uni-memory"],
+  "include_descendants": true,
+  "verification": "pending",
+  "limit": 50
+}
+```
+
+返回 `{ "memories": [...], "next_cursor": "..." }`；后续调用保持过滤条件不变并带上 `cursor: next_cursor`，直到 next_cursor 为 null。REST 将相同 JSON 提交到 `POST /v1/memories/list`。游标是不透明字符串，非法格式返回 invalid_input，无法解码的内容返回 invalid_cursor。
+
+列表按创建时间、UUID 升序，以数据库微秒精度生成游标。普通编辑不会改变排序位置；结果包含当前正文和属性，不含来源及历史，详情按需调用 get/history。每页都排除已删除和过期记忆。分页不是快照：新增、删除、到期或改变过滤属性会影响后续页；需要最新完整结果时重新开始浏览。
+
+两个接口均只需 memory:read，可读取全库范围；分区不提供权限隔离。发现分区无需模型，分页列表不依赖向量索引。升级服务后客户端须重新发现 MCP 工具。
+
 ## 检索与历史
 
 检索示例：
@@ -82,6 +112,36 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 向量范围使用 namespace 精确匹配或祖先路径数组匹配，标签逐个加入 must 条件；数组与 match any 的语义参见 [Qdrant 官方过滤说明](https://qdrant.tech/documentation/search/filtering/)。
 
 升级迁移 `0002_memory_partitions.sql` 将原记录归入 global/type=fact/verification=pending，保留 UUID、key、正文、版本和原始历史；不推断旧数据的项目归属及核实状态。旧向量集合停用后自动重建相同集合的 payload，完整前查询降级。需要人工核对的旧条目通过正常版本更新调整属性，不改写旧历史。
+
+## 记忆库状态
+
+`memory_status` 提供当前记忆数量和实例运行状态，不记录变化日志、不触发模型加载或推理。需要 `memory:read`，沿用 namespaces/include_descendants/tags/type/verification 过滤，namespaces 必填：
+
+```json
+{"namespaces":["global","projects/uni-memory"],"include_descendants":false}
+```
+
+REST 使用 `GET /v1/status?namespaces=global&namespaces=projects%2Funi-memory&include_descendants=false`，参数转换与 core 相同，布尔值仅接受 true/false；重复 tags 参数表示多个标签。成功查询返回 HTTP 200，总体运行状况由响应的 status 表达，保留 `/healthz` 与 `/readyz` 原有语义。
+
+| 字段 | 含义 |
+| --- | --- |
+| status | `ok`：模型最近观测可用、目标集合存在且已激活、全部有效事实版本已索引、无积压或失败任务；`degraded`：数据库可用，但尚未满足上述条件；`unavailable`：统计数据库查询失败 |
+| checked_at / version / uptime_seconds | 查询完成时的 UTC 时间、应用版本、当前进程运行秒数 |
+| scope | 规范化后的查询范围及过滤条件 |
+| memories.active / pending / pinned | 范围内当前有效、有效且待核实、有效且置顶的条目数，包含 overview；pending 是 active 的子集 |
+| memories.expired / last_updated_at | 范围内未删除但已过期的数量；范围内未删除事实（含过期）的最近更新时间，空范围为 null，单纯新增来源不改变该时间 |
+| database / qdrant | `ok` 或 `unavailable`；分别反映统计 SQL 与 Qdrant 集合列表查询是否成功 |
+| embedding | 模型名称、dtype、dimensions、最近观测的 state 与固定 error_code；不返回路径或原始异常 |
+| index | 整个实例的目标集合、当前激活集合、目标集合是否存在、有效事实总数 total、目标集合中版本匹配数量 indexed，以及全库 queued/failed 任务数 |
+| search_mode | `hybrid`：数据库可用、模型 ready、目标集合存在且已激活；`keyword`：数据库可用但向量条件未满足；`unavailable`：数据库统计失败 |
+
+仅 memories 按 scope 统计；运行状态及 index 均反映整个实例，不受指定分区或标签过滤。分区仍不隔离读取权限。index.queued 包含尚未完成的普通、重试等待和删除任务，不含 failed 任务；覆盖率排除删除、过期及旧版本索引，依据 PostgreSQL 的 index_entries 登记，不逐条扫描 Qdrant 向量。
+
+embedding.state 为 `disabled`（未配置 Worker）、`unloaded`（尚未使用）、`loading`、`ready`、`failed`；不提供状态观测的测试或自定义 Embedder 返回 `unknown`。Worker 在加载、推理成功或失败时上报状态，退出时返回固定失败码。未配置模型时 search_mode=keyword、status=degraded，表示向量能力未启用，事实读写仍可用。
+
+统计字段来自同一 SQL 快照，外部依赖与 Worker 是各自采样，状态不保证下一次检索成功，也不保证 Qdrant 未在外部被修改。数据库统计失败时 memories/index 为 null，不伪装为零；Qdrant 故障仍保留数据库统计。鉴权也依赖 PostgreSQL，数据库完全不可达时请求可能先在鉴权阶段失败，此时使用 `/healthz` 和 `/readyz` 检查。接口不返回事实正文、来源或详细任务错误；后者继续通过管理员 `/v1/tasks` 查询。
+
+本地实现待部署，升级后客户端须重新发现 MCP 工具。
 
 ## 运维与安全
 
