@@ -1,0 +1,12 @@
+node_modules
+dist
+.env*
+.secrets
+.cache
+.backups
+.git
+reports
+incoming
+models
+postgres
+qdrant

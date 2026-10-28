@@ -1,0 +1,38 @@
+{
+  "name": "uni-memory",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "start": "node dist/src/main.js",
+    "migrate": "node dist/src/migrate.js",
+    "init": "node scripts/init.mjs",
+    "cli": "node dist/src/cli.js",
+    "benchmark": "npm run build && node scripts/benchmark.mjs",
+    "test:integration": "node --test --test-concurrency=1 dist/test/*.integration.js",
+    "memory:install": "node scripts/install-memory-policy.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "@modelcontextprotocol/express": "2.0.2",
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "express": "5.3.0",
+    "oidc-provider": "9.13.1",
+    "pg": "8.23.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@types/express": "5.0.6",
+    "@types/node": "24.19.2",
+    "@types/oidc-provider": "9.12.1",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2"
+  }
+}

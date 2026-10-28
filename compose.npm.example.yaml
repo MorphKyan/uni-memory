@@ -1,0 +1,12 @@
+# 将 npm_network 替换为现有 NPM 的外部 Docker 网络名称。
+# 使用 docker compose -f compose.yaml -f compose.npm.yaml up -d。
+services:
+  app:
+    networks:
+      default: {}
+      npm:
+        aliases: [uni-memory]
+networks:
+  npm:
+    external: true
+    name: npm_network
