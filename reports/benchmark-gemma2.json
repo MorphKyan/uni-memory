@@ -1,0 +1,276 @@
+{
+  "ok": true,
+  "measured_at": "2026-10-27T15:36:05.059Z",
+  "corpus_sha256": "d9028dbdd0ea9c7b41ba5d40c1ff99ee3b99cecc74cce23e3a780e125b884d84",
+  "model": "gemma2",
+  "repo": "onnx-community/embeddinggemma-2-ONNX",
+  "dtype": "q4",
+  "dimensions": 768,
+  "environment": {
+    "platform": "linux",
+    "release": "6.6.87.2-microsoft-standard-WSL2",
+    "arch": "x64",
+    "node": "v24.22.1",
+    "cpu": "12th Gen Intel(R) Core(TM) i5-12400F",
+    "logical_cpus": 12,
+    "total_memory_bytes": 16669417472,
+    "onnx_threads": 2
+  },
+  "cold_cached_start_ms": 3342.815144,
+  "batch_count": 30,
+  "batch_ms": 1166.206272,
+  "recall_at_5": 1,
+  "mrr": 1,
+  "latency_median_ms": 42.41115400000035,
+  "latency_p95_ms": 52.894844999999805,
+  "process_peak_rss_bytes": 664432640,
+  "model_resource_bytes": 206696682,
+  "results": [
+    {
+      "query": "请用什么语言回复我？",
+      "category": "中文改写",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 38.042577999999594
+    },
+    {
+      "query": "代码架构和依赖应该如何控制？",
+      "category": "中文改写",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 44.824140999999145
+    },
+    {
+      "query": "统一记忆服务器的系统及架构是什么？",
+      "category": "中文",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 45.79793900000004
+    },
+    {
+      "query": "What language and runtime does uni-memory use?",
+      "category": "英文跨语言",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 46.844114999999874
+    },
+    {
+      "query": "Which database is the authoritative memory store?",
+      "category": "英文跨语言",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 42.41115400000035
+    },
+    {
+      "query": "Qdrant 丢失能恢复吗？",
+      "category": "同义改写",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 41.03010600000016
+    },
+    {
+      "query": "Can embeddings run on a GPU?",
+      "category": "否定事实",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 38.90937699999995
+    },
+    {
+      "query": "Compose 要启动几个容器？",
+      "category": "中英混合",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 46.21442399999978
+    },
+    {
+      "query": "NPM 需要重复部署吗？",
+      "category": "缩写",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 36.5613459999995
+    },
+    {
+      "query": "IPv4 与 IPv6 的入口链路",
+      "category": "中英混合",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 41.03991499999938
+    },
+    {
+      "query": "Should I develop in Windows or WSL?",
+      "category": "英文跨语言",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 38.85731200000009
+    },
+    {
+      "query": "Codex 如何读取记忆？",
+      "category": "客户端区分",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 39.26015800000005
+    },
+    {
+      "query": "CodeBuddy 的共享记忆接入通道",
+      "category": "客户端区分",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 45.24215800000002
+    },
+    {
+      "query": "ChatGPT 连接记忆服务如何认证？",
+      "category": "中文",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 37.17256399999951
+    },
+    {
+      "query": "事实被纠正后还能追溯旧值吗？",
+      "category": "同义改写",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 45.68155999999999
+    },
+    {
+      "query": "相同事实再次提交会怎样？",
+      "category": "中文改写",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 44.578911999999946
+    },
+    {
+      "query": "Who chooses the final embedding model?",
+      "category": "英文跨语言",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 37.78210399999989
+    },
+    {
+      "query": "整理后端 API 用哪家和什么协议？",
+      "category": "中英混合",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 50.94142700000066
+    },
+    {
+      "query": "凭据能不能写到 README？",
+      "category": "同义改写",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 42.455910000000586
+    },
+    {
+      "query": "备份多久会清理？",
+      "category": "中文改写",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 38.81740600000012
+    },
+    {
+      "query": "Atlas 的网关运行什么操作系统？",
+      "category": "中文跨语言",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 46.74557800000002
+    },
+    {
+      "query": "Which database does Atlas use for telemetry?",
+      "category": "相近事实",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 42.990640999999414
+    },
+    {
+      "query": "Beacon 的 telemetry 使用 SQLite 还是 PostgreSQL？",
+      "category": "相近事实",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 48.58994700000039
+    },
+    {
+      "query": "How much RAM does Cedar have?",
+      "category": "设备名称",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 39.67749100000037
+    },
+    {
+      "query": "Maple 是 Intel 处理器吗？",
+      "category": "设备名称",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 38.79755900000055
+    },
+    {
+      "query": "Iris 在哪个房间？",
+      "category": "相近设备",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 38.89104700000007
+    },
+    {
+      "query": "Iris-mini 在哪里？",
+      "category": "相近设备",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 39.81365200000073
+    },
+    {
+      "query": "Aurora 主环境每日几点运行？",
+      "category": "相近项目",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 38.876937
+    },
+    {
+      "query": "When does Aurora-staging run its daily task?",
+      "category": "相近项目",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 53.48797400000058
+    },
+    {
+      "query": "Birch 可以当作 uni-memory 的目标部署主机吗？",
+      "category": "否定事实",
+      "rank": 1,
+      "recall_at_5": 1,
+      "mrr": 1,
+      "latency_ms": 52.894844999999805
+    }
+  ],
+  "exit_code": 0,
+  "preparation": {
+    "ok": true,
+    "prepare_ms": 4234.671008,
+    "exit_code": 0
+  }
+}

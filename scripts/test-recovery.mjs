@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
+const env = { ...process.env, COMPOSE_PROJECT_NAME: 'uni-memory-test', COMPOSE_FILE: 'compose.yaml:compose.test.yaml', BACKUP_DATABASE: 'uni_memory_test' };
+const compose = args => execFileSync('docker', ['compose', ...args], { env, encoding: 'utf8' });
+const sql = statement => compose(['exec', '-T', 'postgres', 'psql', '-U', 'uni_memory', '-d', 'uni_memory_test', '-v', 'ON_ERROR_STOP=1', '-tAc', statement]).trim();
+const before = Number(sql('SELECT count(*) FROM memories WHERE deleted_at IS NULL'));
+assert(before > 0, '请先运行集成测试生成合成事实');
+execFileSync('bash', ['scripts/backup.sh'], { env, stdio: 'inherit' });
+const latest = readdirSync('.backups/uni-memory-test').sort().at(-1); assert(latest);
+sql("INSERT INTO memories(id,key,content,namespace,type,verification) VALUES('00000000-0000-4000-8000-000000000001','recovery.after.backup','备份之后的合成事实','global','fact','confirmed')");
+assert.equal(Number(sql('SELECT count(*) FROM memories WHERE deleted_at IS NULL')), before + 1);
+execFileSync('bash', ['scripts/restore.sh', '--replace-current', `.backups/uni-memory-test/${latest}`], { env, stdio: 'inherit' });
+assert.equal(Number(sql('SELECT count(*) FROM memories WHERE deleted_at IS NULL')), before);
+assert.equal(sql("SELECT count(*) FROM memories WHERE key='recovery.after.backup'"), '0');
+assert(Number(sql('SELECT count(*) FROM index_jobs')) > 0);
+assert.equal(sql('SELECT count(*) FROM index_generations'), '0');
+console.log('真实备份/恢复通过：备份后事实已回滚，向量索引已清空并登记重建。');

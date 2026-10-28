@@ -1,0 +1,21 @@
+# 独立测试项目，不连接或清理生产卷。
+name: uni-memory-test
+services:
+  app:
+    command: [node, dist/src/main.js]
+    build:
+      target: test
+    environment:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://uni_memory:${POSTGRES_PASSWORD}@postgres:5432/uni_memory_test
+      OAUTH_ENABLED: "false"
+      EMBEDDING_MODEL: ""
+      TEST_DATABASE: uni_memory_test
+    ports: !reset []
+    read_only: false
+    restart: "no"
+  postgres:
+    environment:
+      POSTGRES_DB: uni_memory_test
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U uni_memory -d uni_memory_test"]
