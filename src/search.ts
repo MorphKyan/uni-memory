@@ -16,7 +16,7 @@ export class Search {
     const data = searchSchema.parse(input);
     const escaped = data.query.replace(/[\\%_]/g, '\\$&');
     const lexicalScope = scopeSql(data, 3);
-    const lexical = (await this.store.pool.query<Memory>(`SELECT * FROM memories WHERE ${visible} AND ${lexicalScope.sql}
+    const lexical = (await this.store.pool.query<Pick<Memory, 'id' | 'version'>>(`SELECT id,version FROM memories WHERE ${visible} AND ${lexicalScope.sql}
       AND (content ILIKE $2 OR key ILIKE $2 OR similarity(content,$1)>0.08)
       ORDER BY (key=$1) DESC,(content ILIKE $2) DESC,similarity(content,$1) DESC,updated_at DESC LIMIT 100`,
     [data.query, `%${escaped}%`, ...lexicalScope.values])).rows;

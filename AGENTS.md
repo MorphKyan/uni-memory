@@ -99,6 +99,10 @@
 
 ## 实现与验收状态
 
+2026-10-28 第三轮代码审查：Indexer 的新集合登记和全量任务补登合并为一条原子 SQL，修复任务登记失败后下轮无法自动补登的问题，并减少一次数据库往返；删除 EmbeddingWorker 重复失败状态和 Memory 未使用的任意字段索引签名，收紧 Worker 句柄可见性。保留工作区已有第二轮修改，未新增依赖。WSL Node.js 24.22.1 构建、11 项单元测试和 18 项真实 PostgreSQL/Qdrant 集成测试通过；新增真实锁超时回归在修复前失败、修复后通过。未部署 Tower，详见 reports/code-review.md。
+
+2026-10-28 第二轮代码审查：key 的 NFKC 规范化集中到共享校验，写入、读取和历史查询规则一致，长度在规范化后校验；修复全角等 Unicode key 写入后按原 key 查不到的问题。删除仅供测试使用的无业务服务应用分支和对应测试文件，健康检查验证并入真实应用集成测试。关键词候选只读取 id/version，完整结果仍回查 PostgreSQL。未新增依赖；WSL Node.js 24.22.1 构建、11 项单元测试及 17 项真实 PostgreSQL/Qdrant 集成测试通过，未部署 Tower。详见 reports/code-review.md。
+
 2026-10-28 代码清理：事务统一到 `src/db.ts`，迁移与事实写入共用回滚和坏连接释放逻辑；写入返回与历史快照复用同一次来源查询。移除无意义单行包装、单次调用辅助函数、未使用字段/导出，以及只为测试创建空 MCP 服务的分支；保留 OAuth SDK 必需方法、共享权限校验和生命周期接口。构建前清理 dist，编译启用未使用变量/参数检查，生产镜像只复制 dist/src；Git 文本文件统一 LF。修复本机地址校验接受非 HTTP 协议，以及 OAuth 初始化失败后推理线程未关闭导致进程挂起的问题。验证记录见 `reports/code-review.md`；此次未部署 Tower。
 
 2026-10-28 已实现 0.2.0 逻辑分区、层级范围、多标签、type/verification、组合唯一键、完整检索过滤和 MCP 默认 Shared Memory Policy v1；配套技能为 `skills/shared-memory/SKILL.md`，安装器为 `scripts/install-memory-policy.mjs`，本机 Windows Codex 全局规则和技能已安装并通过技能格式校验。WSL Node.js 24.22.1 构建、11 项单元测试和 15 项真实 PostgreSQL/Qdrant 集成测试通过，含旧表迁移、层级边界、跨分区同 key、冲突历史、向量候选截断前过滤及数据库回查。Tower 此次升级结果另记于 docs/unraid.md 和 reports/acceptance.md。

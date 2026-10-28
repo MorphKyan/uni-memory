@@ -27,10 +27,11 @@ export class Indexer {
       if (!locked) return;
       const generation = this.embedder ? collectionName(this.embedder) : undefined;
       if (this.embedder) {
-        const inserted = await client.query('INSERT INTO index_generations(name,model,dtype,dimensions) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',
-          [generation, this.embedder.model, this.embedder.dtype, this.embedder.dimensions]);
-        if (inserted.rowCount) await client.query(`INSERT INTO index_jobs(memory_id) SELECT id FROM memories
-          ON CONFLICT(memory_id) DO UPDATE SET attempts=0,failed=false,error_code=NULL,available_at=now()`);
+        await client.query(`WITH generation AS (
+          INSERT INTO index_generations(name,model,dtype,dimensions) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING name
+        ) INSERT INTO index_jobs(memory_id) SELECT id FROM memories WHERE EXISTS (SELECT 1 FROM generation)
+          ON CONFLICT(memory_id) DO UPDATE SET attempts=0,failed=false,error_code=NULL,available_at=now()`,
+        [generation, this.embedder.model, this.embedder.dtype, this.embedder.dimensions]);
       }
       const jobs = (await client.query(`SELECT j.memory_id FROM index_jobs j JOIN memories m ON m.id=j.memory_id
         WHERE NOT j.failed AND j.available_at<=now() AND ($1::boolean OR m.deleted_at IS NOT NULL) ORDER BY j.available_at LIMIT 1`, [!!this.embedder])).rows;

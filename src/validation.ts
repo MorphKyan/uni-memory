@@ -5,14 +5,15 @@ export class AppError extends Error {
   constructor(public status: number, public code: string) { super(code); }
 }
 const identifier = z.string().trim().min(1).max(160);
-export const memorySelector = z.object({ id: z.uuid().optional(), key: identifier.optional(), namespace: namespaceSchema.optional() })
+const memoryKey = z.string().normalize('NFKC').trim().min(1).max(160);
+export const memorySelector = z.object({ id: z.uuid().optional(), key: memoryKey.optional(), namespace: namespaceSchema.optional() })
   .strict().refine(value => value.id ? !value.key && !value.namespace : !!value.key && !!value.namespace,
     '提供 id，或 namespace 和 key');
 export const writeSchema = z.object({
   namespace: namespaceSchema,
   type: memoryType,
   verification: verificationSchema,
-  key: identifier,
+  key: memoryKey,
   content: z.string().trim().min(1).max(4000),
   tags: scopeShape.tags,
   pinned: z.boolean().default(false),

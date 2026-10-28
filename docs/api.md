@@ -37,7 +37,7 @@ MCP 使用无状态 Streamable HTTP，`POST /mcp` 返回 JSON；未启用独立 
 
 type 只能为 `preference`、`fact`、`decision`、`status`。verification 为 `confirmed` 或 `pending`，表示核实状态，不代表系统保证客观真伪；引用和推测不得转换为用户已确认事实。不确定冲突可按当前版本将双方陈述及归属合并进原正文，追加来源并标 pending；核实后再次按版本更新。
 
-`key` 最多 160 字符，正文 4000 字符，标签最多 20 个，每个 64 字符。来源引用及摘录各最多 512 字符。示例均为合成内容。不得提交完整私人会话或凭据；明显凭据格式会被拒绝，但正则检查不能识别所有敏感信息。
+`key` 在写入、读取和历史查询时统一进行 NFKC 规范化并去除首尾空白，规范化后须为 1–160 字符；例如 `ｓｅｒｖｅｒ.①` 与 `server.1` 指向同一 key。正文最多 4000 字符，标签最多 20 个，每个 64 字符。来源引用及摘录各最多 512 字符。示例均为合成内容。不得提交完整私人会话或凭据；明显凭据格式会被拒绝，但正则检查不能识别所有敏感信息。
 
 首次写入返回 `{status:"created",memory:...}`；相同 namespace/key、正文及属性合并来源，返回 merged；不同内容或属性且没有 `expected_version` 返回 conflict。纠正或调整类型、核实状态、标签、置顶、有效期时，先读取当前事实，提交完整新值并加 `expected_version`。未给出的 tags/pinned/expires_at 使用空数组/false/null，写入是完整状态而非 PATCH。改变 namespace/key 会指向另一条事实，不是移动操作；写前应跨 global 与当前项目分区去重。
 

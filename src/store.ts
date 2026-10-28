@@ -8,7 +8,6 @@ export interface Memory {
   id: string; key: string; content: string; tags: string[]; pinned: boolean;
   namespace: string; type: 'preference' | 'fact' | 'decision' | 'status'; verification: 'confirmed' | 'pending';
   expires_at: string | null; version: number; deleted_at: string | null;
-  [field: string]: unknown;
 }
 export const visible = "deleted_at IS NULL AND (expires_at IS NULL OR expires_at > now())";
 async function enqueue(client: PoolClient, id: string) {
@@ -57,7 +56,6 @@ export class Store {
   }
   async write(actor: string, input: unknown) {
     const data = writeSchema.parse(input);
-    data.key = data.key.normalize('NFKC');
     data.content = data.content.normalize('NFC');
     data.tags = [...new Set(data.tags)].sort();
     rejectSecrets(data);

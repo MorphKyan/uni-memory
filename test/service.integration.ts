@@ -55,6 +55,11 @@ after(async () => {
 
 test('真实数据库迁移可重复执行，健康检查区分依赖', async () => {
   assert.deepEqual(await migrate(pool, await readMigrations(new URL('../../migrations/', import.meta.url))), []);
+  const health = await fetch(`${base}/healthz`);
+  assert.equal(health.status, 200);
+  assert.deepEqual(await health.json(), { status: 'ok' });
+  assert.equal(health.headers.get('x-powered-by'), null);
+  assert.equal((await fetch(`${base}/memories`)).status, 404);
   assert.equal((await fetch(`${base}/readyz`)).status, 200);
 });
 
@@ -101,6 +106,23 @@ test('并发纠正仅一个版本成功，重复创建不产生两个当前事�
   const duplicate = fact();
   const merged = await Promise.all([store.write('a', duplicate), store.write('b', duplicate)]);
   assert.deepEqual(merged.map(row => row.status).sort(), ['created', 'merged']);
+});
+
+test('Unicode key 写入后可按原 key 读取、查历史及合并', async () => {
+  const input = fact('ｓｅｒｖｅｒ.①');
+  const response = await request('/v1/memories', writer, input);
+  assert.equal(response.status, 201);
+  const created = await response.json();
+  assert.equal(created.memory.key, 'server.1');
+  const selector = new URLSearchParams({ namespace: input.namespace, key: input.key });
+  const read = await request(`/v1/memories?${selector}`);
+  assert.equal(read.status, 200);
+  assert.equal((await read.json()).id, created.memory.id);
+  const history = await request(`/v1/memories/history?${selector}`);
+  assert.equal(history.status, 200);
+  assert.equal((await history.json())[0].snapshot.key, 'server.1');
+  const merged = await request('/v1/memories', writer, { ...input, key: 'server.1', idempotency_key: randomUUID() });
+  assert.equal((await merged.json()).status, 'merged');
 });
 test('过期事实不可查询；置顶、关键词检索与无模型降级', async () => {
   await store.write('test', { ...fact('test.expired', '永不过期暗号 Pineapple'), pinned: true, expires_at: '2020-01-01T00:00:00Z' });
@@ -254,6 +276,35 @@ test('真实 Qdrant 索引、旧版本过滤、失败重试、重启恢复和模
   for (let i = 0; i < 60 && (await pool.query('SELECT 1 FROM index_jobs')).rowCount; i++) await switching.tick();
   assert.equal((await pool.query('SELECT name FROM index_generations WHERE active')).rows[0]?.name, collectionName(next));
 });
+test('新集合登记任务失败时整体回滚，下一轮仍会登记全部事实', async () => {
+  const embedder = syntheticEmbedder('synthetic-test-only-registration');
+  const name = collectionName(embedder);
+  const limited = createPool(connection);
+  const setup = await limited.connect();
+  await setup.query('SET statement_timeout=200'); setup.release();
+  const blocker = await pool.connect();
+  try {
+    await qdrant.ensure(name, embedder.dimensions);
+    await blocker.query('BEGIN');
+    await blocker.query('LOCK TABLE index_jobs IN ACCESS EXCLUSIVE MODE');
+    await assert.rejects(new Indexer(limited, qdrant, embedder).tick());
+    await blocker.query('ROLLBACK');
+    assert.equal((await pool.query('SELECT 1 FROM index_generations WHERE name=$1', [name])).rowCount, 0);
+    const indexer = new Indexer(pool, qdrant, embedder);
+    await indexer.tick();
+    const missing = await pool.query(`SELECT m.id FROM memories m
+      LEFT JOIN index_entries e ON e.memory_id=m.id AND e.generation=$1
+      LEFT JOIN index_jobs j ON j.memory_id=m.id
+      WHERE m.deleted_at IS NULL AND e.memory_id IS NULL AND j.memory_id IS NULL`, [name]);
+    assert.equal(missing.rowCount, 0);
+  } finally {
+    await blocker.query('ROLLBACK'); blocker.release();
+    await limited.end();
+    await qdrant.request(`/collections/${name}`, 'DELETE');
+    await pool.query('DELETE FROM index_generations WHERE name=$1', [name]);
+  }
+});
+
 test('推理过程中发生删除不会把旧向量写回索引', async () => {
   const input = fact('test.delete-during-index', '索引过程中的合成事实');
   const result = await store.write('test', input); const memory = result.memory as any;
