@@ -84,5 +84,4 @@ export class Indexer {
     await this.pool.query(`INSERT INTO index_jobs(memory_id) SELECT id FROM memories
       ON CONFLICT(memory_id) DO UPDATE SET attempts=0,failed=false,error_code=NULL,available_at=now()`);
   }
-  async retry() { await this.pool.query("UPDATE index_jobs SET attempts=0,failed=false,error_code=NULL,available_at=now()"); }
 }

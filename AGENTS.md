@@ -99,6 +99,8 @@
 
 ## 实现与验收状态
 
+2026-10-28 第四轮代码审查与清理：删除仅转发 SQL 的 `Indexer.retry()`，重试命令直接执行原 SQL；CLI 仅在 reindex 分支创建索引器。移除 `Embedder` 消费接口未使用的 close 要求及测试空实现，具体 Worker 保留关闭能力并直接返回 terminate 的 Promise；收回仅文件内部使用的 Migration 与 oauthAdapter 导出。保留有复用职责的事务、来源查询、全量重建及 OAuth SDK 适配方法。重试集成验证改为运行真实 CLI，检查失败标记、错误码、重试次数及退避时间重置后恢复索引。未新增依赖；WSL Node.js 24.22.1 构建、11 项单元测试和 18 项真实 PostgreSQL/Qdrant 集成测试全部通过。此次未部署 Tower，未重跑真实模型性能及备份恢复测试。
+
 2026-10-28 第三轮代码审查：Indexer 的新集合登记和全量任务补登合并为一条原子 SQL，修复任务登记失败后下轮无法自动补登的问题，并减少一次数据库往返；删除 EmbeddingWorker 重复失败状态和 Memory 未使用的任意字段索引签名，收紧 Worker 句柄可见性。保留工作区已有第二轮修改，未新增依赖。WSL Node.js 24.22.1 构建、11 项单元测试和 18 项真实 PostgreSQL/Qdrant 集成测试通过；新增真实锁超时回归在修复前失败、修复后通过。未部署 Tower，详见 reports/code-review.md。
 
 2026-10-28 第二轮代码审查：key 的 NFKC 规范化集中到共享校验，写入、读取和历史查询规则一致，长度在规范化后校验；修复全角等 Unicode key 写入后按原 key 查不到的问题。删除仅供测试使用的无业务服务应用分支和对应测试文件，健康检查验证并入真实应用集成测试。关键词候选只读取 id/version，完整结果仍回查 PostgreSQL。未新增依赖；WSL Node.js 24.22.1 构建、11 项单元测试及 17 项真实 PostgreSQL/Qdrant 集成测试通过，未部署 Tower。详见 reports/code-review.md。

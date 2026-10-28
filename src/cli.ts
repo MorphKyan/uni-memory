@@ -16,7 +16,6 @@ if (command === 'password-hash') {
   const pool = createPool(process.env.DATABASE_URL);
   try {
     const cfg = config();
-    const indexer = new Indexer(pool, new Qdrant(cfg));
     switch (command) {
       case 'token-create': {
         if (!args[0] || !args[1]) throw new Error('用法 token-create CLIENT SCOPES [DAYS]');
@@ -29,7 +28,7 @@ if (command === 'password-hash') {
         await pool.query('UPDATE client_tokens SET revoked_at=now() WHERE id=$1', [args[0]]); console.log('已撤销'); break;
       case 'oauth-revoke':
         await pool.query("DELETE FROM oauth_state WHERE grant_id=$1 OR (model='Grant' AND id=$1)", [args[0]]); console.log('已撤销 OAuth 授权'); break;
-      case 'reindex': await indexer.rebuild(); console.log('已登记全量重建任务'); break;
+      case 'reindex': await new Indexer(pool, new Qdrant(cfg)).rebuild(); console.log('已登记全量重建任务'); break;
       case 'reset-index': {
         if (args[0] !== '--confirm') throw new Error('reset-index 必须显式 --confirm，且应用主进程须停止');
         const qdrant = new Qdrant(cfg);
@@ -50,7 +49,9 @@ if (command === 'password-hash') {
         });
         console.log('已清空本项目向量索引并登记重建'); break;
       }
-      case 'retry': await indexer.retry(); console.log('已重置索引重试状态'); break;
+      case 'retry':
+        await pool.query('UPDATE index_jobs SET attempts=0,failed=false,error_code=NULL,available_at=now()');
+        console.log('已重置索引重试状态'); break;
       case 'tasks': console.log(JSON.stringify((await pool.query('SELECT * FROM index_jobs ORDER BY available_at')).rows, null, 2)); break;
       case 'organize':
         if (args.shift() !== '--allow-external') throw new Error('整理需显式提供 --allow-external 及记忆 ID');
