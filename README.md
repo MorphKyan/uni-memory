@@ -8,6 +8,8 @@
 
 ## 启动
 
+每个分区使用 `key=overview` 保存总览记忆，客户端维护用途、现状和重要记忆入口；服务自动置顶，`memory_core` 优先返回。读写约定见 [分区总览](docs/api.md#分区总览)。
+
 要求 Node.js 24 LTS 和 npm，支持在 WSL/Linux 下开发。
 
 ```sh

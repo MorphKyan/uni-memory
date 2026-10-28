@@ -36,7 +36,7 @@ export class Store {
   }
   async core(input: unknown) {
     const scope = scopeSql(scopeSchema.parse(input), 1);
-    return (await this.pool.query<Memory>(`SELECT * FROM memories WHERE pinned AND ${visible} AND ${scope.sql} ORDER BY updated_at DESC LIMIT 50`, scope.values)).rows;
+    return (await this.pool.query<Memory>(`SELECT * FROM memories WHERE pinned AND ${visible} AND ${scope.sql} ORDER BY (key='overview') DESC, updated_at DESC, id LIMIT 50`, scope.values)).rows;
   }
   private async idempotent(actor: string, key: string, request: unknown, run: (client: PoolClient) => Promise<Record<string, unknown>>) {
     const hash = createHash('sha256').update(JSON.stringify(request)).digest('hex');
@@ -56,6 +56,7 @@ export class Store {
   }
   async write(actor: string, input: unknown) {
     const data = writeSchema.parse(input);
+    if (data.key === 'overview') data.pinned = true;
     data.content = data.content.normalize('NFC');
     data.tags = [...new Set(data.tags)].sort();
     rejectSecrets(data);

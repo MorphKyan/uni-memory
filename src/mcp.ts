@@ -31,6 +31,6 @@ export function createMcpServer(store: Store, search: Search, identity: Identity
   tool('memory_write', '遵循 Shared Memory Policy v1：写前搜索去重；指定 namespace/key/type/verification；明确变化按 expected_version 更新；不确定冲突保留双方及来源并标 pending。提交完整属性和最少来源，每个新操作使用唯一 idempotency_key；不存凭据、完整聊天或用户要求不保存的内容。', writeSchema, 'memory:write', input => store.write(identity.clientId, input));
   tool('memory_history', '按 id 或 namespace+key 查看尚未删除记忆的变更历史和来源。', memorySelector, 'memory:read', input => store.history(input));
   tool('memory_delete', '删除事实及其历史、来源，不能撤销；需当前版本和幂等键。', deleteSchema, 'memory:write', input => store.delete(identity.clientId, input));
-  tool('memory_core', '指定 namespaces 读取置顶且当前有效的核心事实；pending 条目需核实。', scopeSchema, 'memory:read', input => store.core(input));
+  tool('memory_core', '指定 namespaces 读取置顶且当前有效的核心事实，优先返回各分区 key=overview 的总览；总览由客户端创建和按版本维护，pending 条目需核实。', scopeSchema, 'memory:read', input => store.core(input));
   return server;
 }

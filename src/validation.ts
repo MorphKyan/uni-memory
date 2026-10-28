@@ -21,7 +21,8 @@ export const writeSchema = z.object({
   source: z.object({ reference: z.string().trim().min(1).max(512), excerpt: z.string().trim().max(512).default('') }).strict(),
   expected_version: z.number().int().positive().optional(),
   idempotency_key: identifier,
-}).strict();
+}).strict().refine(value => value.key !== 'overview' || value.expires_at === null,
+  'overview 总览使用长期有效期 expires_at=null');
 export const deleteSchema = z.object({
   id: z.uuid(), expected_version: z.number().int().positive(), idempotency_key: identifier,
 }).strict();

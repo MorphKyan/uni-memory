@@ -63,6 +63,41 @@ test('真实数据库迁移可重复执行，健康检查区分依赖', async ()
   assert.equal((await fetch(`${base}/readyz`)).status, 200);
 });
 
+test('分区总览隔离、优先返回并沿用版本冲突与删除规则', async () => {
+  const namespaces = ['projects/overview-test', 'projects/overview-test/child'];
+  const ids: string[] = [];
+  for (const namespace of namespaces) {
+    const input = { ...fact('overview', `合成分区总览：${namespace}`), namespace, type: 'status', pinned: false };
+    const created = await store.write('overview-test', input);
+    const memory = created.memory as { id: string; version: number; pinned: boolean };
+    ids.push(memory.id);
+    assert.equal(memory.pinned, true);
+    const updated = await store.write('overview-test', { ...input, content: '合成总览：已更新', expected_version: memory.version, idempotency_key: randomUUID() });
+    assert.equal(updated.status, 'updated');
+    assert.equal((await store.write('overview-test', { ...input, expected_version: memory.version, idempotency_key: randomUUID() })).status, 'conflict');
+  }
+  // 超过 core 上限的较新置顶事实也应为总览保留位置。
+  for (let i = 0; i < 51; i++) {
+    const created = await store.write('overview-test', { ...fact(`detail.${i}`), namespace: namespaces[0], pinned: true });
+    ids.push((created.memory as { id: string }).id);
+  }
+  const exact = await store.core({ namespaces: [namespaces[0]] });
+  assert.equal(exact.length, 50);
+  assert.equal(exact[0]!.key, 'overview');
+  assert(exact.every(memory => memory.namespace === namespaces[0]));
+  const descendants = await store.core({ namespaces: [namespaces[0]], include_descendants: true });
+  assert.deepEqual(new Set(descendants.slice(0, 2).map(memory => memory.namespace)), new Set(namespaces));
+  for (const id of ids) {
+    const memory = await store.get({ id });
+    await store.delete('overview-test', { id, expected_version: memory.version, idempotency_key: randomUUID() });
+  }
+  assert.deepEqual(await store.core({ namespaces: [namespaces[0]], include_descendants: true }), []);
+  // 清理本用例的合成墓碑与任务，保持后续索引测试的队列规模。
+  await pool.query('DELETE FROM index_jobs WHERE memory_id=ANY($1::uuid[])', [ids]);
+  await pool.query('DELETE FROM idempotency WHERE memory_id=ANY($1::uuid[])', [ids]);
+  await pool.query('DELETE FROM memories WHERE id=ANY($1::uuid[])', [ids]);
+});
+
 test('启动阶段 OAuth 配置失败时关闭已创建的推理线程并退出', () => {
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('../src/main.js', import.meta.url))], {
     env: { ...process.env, DATABASE_URL: connection, PUBLIC_URL: 'http://127.0.0.1:3000',
