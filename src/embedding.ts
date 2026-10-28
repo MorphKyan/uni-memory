@@ -16,12 +16,11 @@ export function collectionName(embedder: Pick<Embedder, 'model' | 'dtype' | 'dim
   return `uni_mem_${createHash('sha256').update(`${embedder.model}:${embedder.dtype}:${embedder.dimensions}`).digest('hex').slice(0, 20)}`;
 }
 export class EmbeddingWorker implements Embedder {
-  readonly worker: Worker;
+  private readonly worker: Worker;
   readonly model: string;
   readonly dimensions: number;
   private sequence = 0;
   private pending = new Map<number, { resolve: (value: number[][]) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
-  private failed = false;
   failure?: string;
   constructor(name: ModelName, public dtype: string = models[name]?.dtype, cache = './.cache/models') {
     if (!Object.hasOwn(models, name) || !['q8', 'q4', 'fp32'].includes(dtype)) throw new Error('未知 embedding 模型或精度');
@@ -40,7 +39,6 @@ export class EmbeddingWorker implements Embedder {
     });
     const fail = (error: Error) => {
       this.failure ??= `${error.name}: ${error.message.replace(/https?:\/\/\S+/g, '[url]').slice(0, 300)}`;
-      this.failed = true;
       for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('embedding_worker_closed')); }
       this.pending.clear();
     };
@@ -48,7 +46,7 @@ export class EmbeddingWorker implements Embedder {
     this.worker.on('exit', code => fail(new Error(`worker_exit_${code}`)));
   }
   embed(texts: string[], query = false) {
-    if (this.failed || this.pending.size >= 16 || !texts.length || texts.length > 64) return Promise.reject(new Error('embedding_unavailable'));
+    if (this.failure || this.pending.size >= 16 || !texts.length || texts.length > 64) return Promise.reject(new Error('embedding_unavailable'));
     const id = ++this.sequence;
     return new Promise<number[][]>((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('embedding_timeout')); }, 1200000);
