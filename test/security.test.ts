@@ -7,6 +7,10 @@ import { fuse } from '../src/search.js';
 import express from 'express';
 import { rateLimit } from '../src/app.js';
 import { once } from 'node:events';
+import type { Pool } from 'pg';
+import { createOAuth } from '../src/oauth.js';
+import { organize } from '../src/organize.js';
+import type { Store } from '../src/store.js';
 
 test('scrypt、权限与公网 URL 校验', () => {
   const password = 'a-synthetic-long-passphrase';
@@ -40,4 +44,19 @@ test('写入输入严格、凭据拒绝与 RRF 去重', () => {
   assert.throws(() => rejectSecrets({ content: 'api_key=synthetic-credentials' }));
   assert.doesNotThrow(() => rejectSecrets({ content: '用户希望密钥只放环境变量。' }));
   assert.deepEqual(fuse([['a', 'b', 'a'], ['b', 'c']], 3), ['b', 'a', 'c']);
+});
+
+test('本机地址例外仅允许 HTTP，不接受其他协议', async () => {
+  const id = '319ea735-b71b-442f-92f4-c1e1b35ad09f';
+  const store = { get: async () => ({ id, version: 1, key: 'synthetic', content: '合成事实' }) } as unknown as Store;
+  for (const protocol of ['ftp:', 'file:', 'ws:']) {
+    const url = `${protocol}//localhost/callback`;
+    await assert.rejects(createOAuth({} as Pool, config({
+      OWNER_PASSWORD_HASH: 'synthetic', OAUTH_COOKIE_KEY: 'x'.repeat(32),
+      OAUTH_CLIENTS_JSON: JSON.stringify([{ client_id: 'synthetic', redirect_uris: [url] }]),
+    })), /回调地址必须使用 HTTPS 或本机 HTTP/);
+    await assert.rejects(organize(store, config({
+      EXTERNAL_ORGANIZE_ENABLED: 'true', LLM_MODEL: 'synthetic', LLM_API_KEY: 'synthetic', LLM_BASE_URL: url,
+    }), [id]), { message: 'unsafe_llm_url' });
+  }
 });

@@ -23,7 +23,7 @@ FROM node:24.22.1-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 MODEL_CACHE=/models
 COPY --from=production-deps --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/dist ./dist
+COPY --from=build --chown=node:node /app/dist/src ./dist/src
 COPY package.json ./
 COPY migrations ./migrations
 RUN mkdir /models && chown node:node /models

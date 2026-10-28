@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import test from 'node:test';
 import { createApp } from '../src/app.js';
 
-test('健康检查可用，尚未实现的业务入口返回 404', async () => {
+test('未装配业务服务时仅提供健康检查', async () => {
   const server = createApp().listen(0, '127.0.0.1');
   try {
     await once(server, 'listening');

@@ -1,5 +1,5 @@
 import type { Config } from './config.js';
-import { namespacePaths, type MemoryScope } from './scope.js';
+import type { MemoryScope } from './scope.js';
 import type { Memory } from './store.js';
 
 export class Qdrant {
@@ -29,8 +29,9 @@ export class Qdrant {
   }
   async upsert(name: string, memory: Memory, vector: number[]) {
     const { id, version, namespace, tags, type, verification } = memory;
+    const namespace_paths = namespace.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/'));
     await this.request(`/collections/${name}/points?wait=true`, 'PUT', {
-      points: [{ id, vector, payload: { version, namespace, namespace_paths: namespacePaths(namespace), tags, type, verification } }],
+      points: [{ id, vector, payload: { version, namespace, namespace_paths, tags, type, verification } }],
     });
   }
   async delete(name: string, id: string) {

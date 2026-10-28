@@ -7,11 +7,10 @@ import type { Search } from './search.js';
 import { scopeSchema } from './scope.js';
 import { sharedMemoryPolicy } from './policy.js';
 
-export function createMcpServer(store?: Store, search?: Search, identity?: Identity) {
+export function createMcpServer(store: Store, search: Search, identity: Identity) {
   const server = new McpServer({ name: 'uni-memory', version: '0.2.0' }, {
     instructions: sharedMemoryPolicy,
   });
-  if (!store || !search || !identity) return server;
   function tool(name: string, description: string, schema: z.ZodType, scope: string, run: (input: unknown) => Promise<unknown>) {
     server.registerTool(name, {
       description, inputSchema: schema,
@@ -19,7 +18,7 @@ export function createMcpServer(store?: Store, search?: Search, identity?: Ident
       _meta: { securitySchemes: [{ type: 'oauth2', scopes: [scope] }] },
     }, async input => {
       try {
-        requireScope(identity!, scope);
+        requireScope(identity, scope);
         const value = await run(input);
         return { content: [{ type: 'text', text: JSON.stringify(value) }] };
       } catch (error) {

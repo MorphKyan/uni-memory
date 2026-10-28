@@ -61,7 +61,7 @@ export function createApp(services?: Services) {
     const auth = authentication(store.pool, cfg.resource, provider);
     app.use(['/v1', '/mcp'], auth, express.json({ limit: '32kb', strict: true }));
     function scope(name: string): RequestHandler {
-      return (_req, res, next) => { try { requireScope(res.locals.identity as Identity, name); next(); } catch (error) { next(error); } };
+      return (_req, res, next) => { requireScope(res.locals.identity as Identity, name); next(); };
     }
     app.get('/v1/memories/core', scope('memory:read'), async (req, res) => {
       const input = { ...req.query };

@@ -11,11 +11,12 @@ import { createOAuth } from './oauth.js';
 
 const cfg = config();
 const pool = createPool(process.env.DATABASE_URL);
+let embedder: EmbeddingWorker | undefined;
 try {
   await migrate(pool, await readMigrations(new URL('../../migrations/', import.meta.url)));
   const store = new Store(pool);
   const qdrant = new Qdrant(cfg);
-  const embedder = cfg.model ? new EmbeddingWorker(cfg.model as ModelName, process.env.EMBEDDING_DTYPE || undefined, cfg.modelCache) : undefined;
+  embedder = cfg.model ? new EmbeddingWorker(cfg.model as ModelName, process.env.EMBEDDING_DTYPE || undefined, cfg.modelCache) : undefined;
   const provider = cfg.oauthEnabled ? await createOAuth(pool, cfg) : undefined;
   const app = createApp({ cfg, store, qdrant, search: new Search(store, qdrant, embedder), provider });
   const indexer = new Indexer(pool, qdrant, embedder);
@@ -37,6 +38,7 @@ try {
   }
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void shutdown(); });
 } catch {
+  await embedder?.close();
   await pool.end();
   console.error('启动失败，请检查配置、迁移和依赖状态');
   process.exitCode = 1;

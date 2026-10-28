@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { deleteSchema, memorySelector, rejectSecrets, writeSchema, AppError } from './validation.js';
 import { scopeSchema, scopeSql } from './scope.js';
+import { transaction } from './db.js';
 
 export interface Memory {
   id: string; key: string; content: string; tags: string[]; pinned: boolean;
@@ -10,30 +11,12 @@ export interface Memory {
   [field: string]: unknown;
 }
 export const visible = "deleted_at IS NULL AND (expires_at IS NULL OR expires_at > now())";
-export async function transaction<T>(pool: Pool, run: (client: PoolClient) => Promise<T>) {
-  const client = await pool.connect();
-  let broken = false;
-  try {
-    await client.query('BEGIN');
-    const result = await run(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    try { await client.query('ROLLBACK'); } catch { broken = true; }
-    throw error;
-  } finally { client.release(broken); }
-}
-export async function enqueue(client: PoolClient, id: string) {
+async function enqueue(client: PoolClient, id: string) {
   await client.query(`INSERT INTO index_jobs(memory_id) VALUES ($1)
     ON CONFLICT(memory_id) DO UPDATE SET attempts=0, failed=false, error_code=NULL, available_at=now()`, [id]);
 }
-async function sources(client: PoolClient, id: string) {
+async function sources(client: Pool | PoolClient, id: string) {
   return (await client.query('SELECT client_id, reference, excerpt, created_at FROM memory_sources WHERE memory_id=$1 ORDER BY created_at', [id])).rows;
-}
-async function snapshot(client: PoolClient, memory: Memory, actor: string) {
-  const source = await sources(client, memory.id);
-  await client.query('INSERT INTO memory_events(memory_id, version, client_id, snapshot) VALUES($1,$2,$3,$4)',
-    [memory.id, memory.version, actor, JSON.stringify({ ...memory, sources: source })]);
 }
 export class Store {
   constructor(public pool: Pool) {}
@@ -43,7 +26,7 @@ export class Store {
       select.id ? [select.id] : [select.key, select.namespace]);
     const memory = result.rows[0];
     if (!memory) throw new AppError(404, 'memory_not_found');
-    return { ...memory, sources: (await this.pool.query('SELECT client_id, reference, excerpt, created_at FROM memory_sources WHERE memory_id=$1 ORDER BY created_at', [memory.id])).rows };
+    return { ...memory, sources: await sources(this.pool, memory.id) };
   }
   async history(input: unknown) {
     const select = memorySelector.parse(input);
@@ -106,9 +89,13 @@ export class Store {
       }
       const addedSource = await client.query(`INSERT INTO memory_sources(memory_id,client_id,reference,excerpt) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
         [memory.id, actor, data.source.reference, data.source.excerpt]);
-      if (status !== 'merged' || addedSource.rowCount) await snapshot(client, memory, actor);
+      const result = { ...memory, sources: await sources(client, memory.id) };
+      if (status !== 'merged' || addedSource.rowCount) {
+        await client.query('INSERT INTO memory_events(memory_id, version, client_id, snapshot) VALUES($1,$2,$3,$4)',
+          [memory.id, memory.version, actor, JSON.stringify(result)]);
+      }
       if (status !== 'merged') await enqueue(client, memory.id);
-      return { status, memory: { ...memory, sources: await sources(client, memory.id) } };
+      return { status, memory: result };
     });
   }
   async delete(actor: string, input: unknown) {

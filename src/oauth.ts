@@ -44,7 +44,8 @@ export async function createOAuth(pool: Pool, cfg: Config) {
     if (client.token_endpoint_auth_method !== 'none' && !client.client_secret) throw new Error('OAuth confidential client 缺少 secret');
     for (const redirect of client.redirect_uris) {
       const url = new URL(redirect);
-      if (url.hash || url.username || url.password || (url.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) {
+      if (url.hash || url.username || url.password || (url.protocol !== 'https:'
+        && (url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) {
         throw new Error('OAuth 回调地址必须使用 HTTPS 或本机 HTTP');
       }
     }

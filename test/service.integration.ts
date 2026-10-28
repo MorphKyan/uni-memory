@@ -5,6 +5,8 @@ import { once } from 'node:events';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createPool } from '../src/db.js';
@@ -55,6 +57,17 @@ test('真实数据库迁移可重复执行，健康检查区分依赖', async ()
   assert.deepEqual(await migrate(pool, await readMigrations(new URL('../../migrations/', import.meta.url))), []);
   assert.equal((await fetch(`${base}/readyz`)).status, 200);
 });
+
+test('启动阶段 OAuth 配置失败时关闭已创建的推理线程并退出', () => {
+  const child = spawnSync(process.execPath, [fileURLToPath(new URL('../src/main.js', import.meta.url))], {
+    env: { ...process.env, DATABASE_URL: connection, PUBLIC_URL: 'http://127.0.0.1:3000',
+      EMBEDDING_MODEL: 'gemma2', EMBEDDING_DTYPE: 'q4', OAUTH_ENABLED: 'true', OWNER_PASSWORD_HASH: '', OAUTH_COOKIE_KEY: '' },
+    encoding: 'utf8', timeout: 15000,
+  });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1);
+  assert.match(child.stderr, /启动失败/);
+});
 test('跨客户端读取、来源身份、幂等、来源合并和显式纠正', async () => {
   const input = fact();
   const result = await request('/v1/memories', writer, input); assert.equal(result.status, 201);
@@ -66,7 +79,9 @@ test('跨客户端读取、来源身份、幂等、来源合并和显式纠正',
   assert.equal((await request('/v1/memories', writer, { ...input, client_id: 'admin' })).status, 400);
   const other = fact(input.key, input.content);
   other.source.reference = 'synthetic:second';
-  assert.equal((await (await request('/v1/memories', writer, other)).json()).status, 'merged');
+  const merged = await (await request('/v1/memories', writer, other)).json();
+  assert.equal(merged.status, 'merged');
+  assert.equal(merged.memory.sources.length, 2);
   const correction = { ...fact(input.key, '合成事实：测试用户偏好中文和英文。'), expected_version: 1 };
   const updated = await (await request('/v1/memories', writer, correction)).json();
   assert.equal(updated.memory.version, 2);
@@ -74,6 +89,8 @@ test('跨客户端读取、来源身份、幂等、来源合并和显式纠正',
   assert.equal(conflict.status, 409);
   const history = await (await request(`/v1/memories/history?id=${id}`)).json();
   assert(history.some((event: any) => event.snapshot.content === input.content));
+  assert.deepEqual(history.at(-1).snapshot.sources, updated.memory.sources);
+  assert.deepEqual(history.at(-1).snapshot, await (await request(`/v1/memories?id=${id}`)).json());
 });
 test('并发纠正仅一个版本成功，重复创建不产生两个当前事实', async () => {
   const input = fact();
@@ -283,6 +300,8 @@ test('向量在候选截断前过滤分区、子层级和全部标签，回查�
   try {
     await qdrant.ensure(name, 3);
     await qdrant.upsert(name, target, [0.9, 0.1, 0]);
+    const indexed = await qdrant.request(`/collections/${name}/points/${target.id}`);
+    assert.deepEqual(indexed.payload.namespace_paths, ['projects', 'projects/vector-filter', 'projects/vector-filter/home', 'projects/vector-filter/home/linux']);
     await qdrant.request(`/collections/${name}/points?wait=true`, 'PUT', { points: Array.from({ length: 110 }, () => ({
       id: randomUUID(), vector: [1, 0, 0], payload: { version: 1, namespace: 'projects/vector-filter/home-other',
         namespace_paths: ['projects', 'projects/vector-filter', 'projects/vector-filter/home-other'], tags: ['linux', 'unraid'], type: 'decision', verification: 'pending' },
