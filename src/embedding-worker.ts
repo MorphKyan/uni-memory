@@ -10,6 +10,7 @@ const session_options = { intraOpNumThreads: 2, interOpNumThreads: 1 };
 let extractor: Awaited<ReturnType<typeof pipeline<'feature-extraction'>>> | undefined;
 let gemma: { model: Awaited<ReturnType<typeof AutoModel.from_pretrained>>; tokenizer: Awaited<ReturnType<typeof AutoTokenizer.from_pretrained>> } | undefined;
 async function embed(texts: string[], query: boolean) {
+  if (!gemma && !extractor) parentPort!.postMessage({ state: 'loading' });
   const spec = models[name];
   const prefixed = texts.map(text => name === 'e5' ? `${query ? 'query' : 'passage'}: ${text}`
     : name === 'bge' ? `${query ? '为这个句子生成表示以用于检索相关文章：' : ''}${text}`
@@ -32,12 +33,17 @@ async function embed(texts: string[], query: boolean) {
 let queue = Promise.resolve();
 parentPort!.on('message', (message: { id: number; texts: string[]; query: boolean }) => {
   queue = queue.then(async () => {
-    try { parentPort!.postMessage({ id: message.id, vectors: await embed(message.texts, message.query) }); }
+    try {
+      const vectors = await embed(message.texts, message.query);
+      parentPort!.postMessage({ state: 'ready' });
+      parentPort!.postMessage({ id: message.id, vectors });
+    }
     catch (error) {
       const errorMessage = error instanceof Error ? error.message : '';
       const code = /unsupported|unrecognized|unknown model type/i.test(errorMessage) ? 'unsupported_model_architecture'
         : /fetch|download|network|connect|timed? ?out|status.?code/i.test(errorMessage) ? 'model_download_failed'
         : /not found|404|no such file/i.test(errorMessage) ? 'model_files_not_found' : 'model_load_or_inference_failed';
+      parentPort!.postMessage({ state: 'failed', error: code });
       parentPort!.postMessage({ id: message.id, error: code });
     }
   });

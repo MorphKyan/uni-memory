@@ -17,7 +17,7 @@ try {
   assert.equal((await fetch(url, { method: 'POST' })).status, 401);
   assert.equal((await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}`, Origin: 'https://untrusted.example' } })).status, 403);
   await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
-  assert.equal((await client.listTools()).tools.length, 6);
+  assert.equal((await client.listTools()).tools.length, 9);
   assert(client.getInstructions()?.includes('Shared Memory Policy v1'));
   const key = `synthetic.deployment.${randomUUID()}`;
   const parent = `projects/synthetic-check/${randomUUID()}`;
@@ -28,11 +28,26 @@ try {
   const sibling = await call('memory_write', { ...input, namespace: `${parent}-other`, idempotency_key: randomUUID() });
   memories.set(sibling.memory.id, sibling.memory);
   assert.notEqual(memory.id, sibling.memory.id);
+  const status = await call('memory_status', { namespaces: [parent], include_descendants: true });
+  assert.equal(status.database, 'ok');
+  assert.equal(status.memories.active, 1);
   assert.equal((await call('memory_get', { id: memory.id })).key, key);
   assert.equal((await call('memory_get', { namespace: input.namespace, key })).id, memory.id);
   assert((await client.callTool({ name: 'memory_search', arguments: { query: '测试' } })).isError);
   assert.equal((await call('memory_core', { namespaces: [parent] })).length, 0);
   assert.deepEqual((await call('memory_core', { namespaces: [parent], include_descendants: true })).map(m => m.id), [memory.id]);
+  assert.deepEqual((await call('memory_namespaces', { parent })).namespaces, [{ namespace: input.namespace, count: 1 }]);
+  const overview = await call('memory_write', { ...input, key: 'overview', type: 'status', pinned: false,
+    content: '部署验收合成分区总览。', idempotency_key: randomUUID() });
+  memories.set(overview.memory.id, overview.memory);
+  assert.equal(overview.memory.pinned, true);
+  assert.equal((await call('memory_core', { namespaces: [parent], include_descendants: true }))[0].id, overview.memory.id);
+  const page = await call('memory_list', { namespaces: [parent], include_descendants: true, limit: 1 });
+  assert.deepEqual(page.memories.map(item => item.id), [memory.id]);
+  assert(page.next_cursor);
+  const next = await call('memory_list', { namespaces: [parent], include_descendants: true, limit: 1, cursor: page.next_cursor });
+  assert.deepEqual(next.memories.map(item => item.id), [overview.memory.id]);
+  assert.equal(next.next_cursor, null);
   let found;
   for (let attempt = 0; attempt < 90; attempt++) {
     found = await call('memory_search', { namespaces: [parent], include_descendants: true, tags: ['linux', 'unraid'],
@@ -42,12 +57,15 @@ try {
   }
   assert.equal(found.degraded, false);
   assert.deepEqual(found.memories.map(item => item.id), [memory.id]);
+  const ready = await call('memory_status', { namespaces: [parent], include_descendants: true });
+  assert.equal(ready.embedding.state, 'ready');
+  assert.equal(ready.search_mode, 'hybrid');
   const updated = await call('memory_write', { ...input, content: `${input.content} 待核实的另一说法：存放在绿色客厅。`,
     verification: 'pending', expected_version: memory.version, source: { reference: 'synthetic:conflicting-report' }, idempotency_key: randomUUID() });
   memory = updated.memory; memories.set(memory.id, memory);
   assert.equal(memory.version, 2); assert.equal(memory.verification, 'pending'); assert.equal(memory.sources.length, 2);
   const history = await call('memory_history', { id: memory.id }); assert.equal(history.length, 2);
-  console.log('部署验收通过：认证/Origin、MCP 默认策略及新字段、跨分区同 key、层级边界、标签/类型/核实过滤、Gemma 2 跨语言检索、待核实冲突与历史。');
+  console.log('部署验收通过：九个 MCP 工具、认证/Origin、默认策略及新字段、分区总览自动置顶及优先返回、分区发现、游标分页、状态与真实推理、跨分区同 key、层级边界、标签/类型/核实过滤、Gemma 2 跨语言检索、待核实冲突与历史。');
 } finally {
   const cleanup = await Promise.allSettled([...memories.values()].map(memory => call('memory_delete', { id: memory.id, expected_version: memory.version, idempotency_key: randomUUID() })));
   await client.close();

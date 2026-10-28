@@ -30,6 +30,17 @@ export const searchSchema = z.object({
   ...scopeShape,
   query: z.string().trim().min(1).max(512), limit: z.number().int().min(1).max(50).default(10),
 }).strict();
+export const namespacesSchema = z.object({ parent: namespaceSchema.optional() }).strict();
+export const listSchema = z.object({
+  ...scopeShape,
+  limit: z.number().int().min(1).max(100).default(50),
+  cursor: z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/).optional(),
+}).strict();
+const cursorSchema = z.object({ created_at: z.iso.datetime(), id: z.uuid() }).strict();
+export function decodeListCursor(cursor: string) {
+  try { return cursorSchema.parse(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))); }
+  catch { throw new AppError(400, 'invalid_cursor'); }
+}
 export function rejectSecrets(value: unknown) {
   const string = JSON.stringify(value);
   if (/(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-(?:proj-)?[a-zA-Z0-9_-]{16,}|\b(?:password|api[_-]?key|access[_-]?token|secret)\s*[:=]\s*["']?[^\s"',}]{8,}|https?:\/\/[^\s/:]+:[^\s/@]+@)/i.test(string)) {

@@ -7,8 +7,13 @@ export const models = {
   gemma2: { repo: 'onnx-community/embeddinggemma-2-ONNX', dimensions: 768, dtype: 'q4' },
 } as const;
 export type ModelName = keyof typeof models;
+export interface EmbeddingStatus {
+  state: 'unloaded' | 'loading' | 'ready' | 'failed';
+  error_code: string | null;
+}
 export interface Embedder {
   model: string; dtype: string; dimensions: number;
+  readonly status?: EmbeddingStatus;
   embed(texts: string[], query?: boolean): Promise<number[][]>;
 }
 export function collectionName(embedder: Pick<Embedder, 'model' | 'dtype' | 'dimensions'>) {
@@ -21,13 +26,18 @@ export class EmbeddingWorker implements Embedder {
   private sequence = 0;
   private pending = new Map<number, { resolve: (value: number[][]) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   failure?: string;
+  status: EmbeddingStatus = { state: 'unloaded', error_code: null };
   constructor(name: ModelName, public dtype: string = models[name]?.dtype, cache = './.cache/models') {
     if (!Object.hasOwn(models, name) || !['q8', 'q4', 'fp32'].includes(dtype)) throw new Error('未知 embedding 模型或精度');
     const spec = models[name];
     this.model = spec.repo;
     this.dimensions = spec.dimensions;
     this.worker = new Worker(new URL('./embedding-worker.js', import.meta.url), { workerData: { name, dtype, cache } });
-    this.worker.on('message', (message: { id: number; vectors?: number[][]; error?: string }) => {
+    this.worker.on('message', (message: { state: EmbeddingStatus['state']; error?: string } | { id: number; vectors?: number[][]; error?: string }) => {
+      if ('state' in message) {
+        if (!this.failure) this.status = { state: message.state, error_code: message.error ?? null };
+        return;
+      }
       const pending = this.pending.get(message.id);
       if (!pending) return;
       clearTimeout(pending.timer);
@@ -37,6 +47,7 @@ export class EmbeddingWorker implements Embedder {
       } else pending.resolve(message.vectors);
     });
     const fail = (error: Error) => {
+      this.status = { state: 'failed', error_code: 'embedding_worker_closed' };
       this.failure ??= `${error.name}: ${error.message.replace(/https?:\/\/\S+/g, '[url]').slice(0, 300)}`;
       for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('embedding_worker_closed')); }
       this.pending.clear();

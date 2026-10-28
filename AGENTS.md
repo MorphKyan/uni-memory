@@ -23,7 +23,7 @@
 | 项目 | 当前配置 |
 | --- | --- |
 | 工具链 | TypeScript、Node.js 24 LTS、npm、Node 内置测试；依赖版本锁定于 `package-lock.json` |
-| HTTP 与 MCP | Express、官方 MCP TypeScript SDK；REST 与六个 memory 工具共用业务逻辑 |
+| HTTP 与 MCP | Express、官方 MCP TypeScript SDK；本地 REST 与九个 memory 工具共用业务逻辑，分区发现、分页列表及状态查询待部署 |
 | 数据库访问 | node-postgres、直接 SQL、版本化 SQL 迁移 |
 | PostgreSQL | 独立 PostgreSQL 18.6，保存事实、历史、来源、幂等记录、Outbox、客户端令牌及 OAuth 状态；内部访问 |
 | Qdrant | 独立 Qdrant 1.19.2，可重建向量索引；保存向量、ID、版本及过滤元数据，正文和来源由 PostgreSQL 保存；内部访问 |
@@ -72,6 +72,10 @@ Windows 私密文件为 `%USERPROFILE%\.codex\private-services\credentials.json`
 SSH 保持主机指纹验证；HTTP 凭据仅发送至确认的服务地址。连接缺失、失效或不可达时，请用户在本机私密文件补充。共享记忆不可用时，Tower 恢复入口见 `docs/service-access.md`。
 
 ## 验证状态与待办
+
+- 记忆库状态：本地新增 memory_status 与 GET /v1/status，沿用 memory:read 和范围过滤；记忆数量按范围统计，依赖、模型、索引任务及版本覆盖率反映整个实例。Worker 上报加载与推理状态，查询不触发推理；无新增依赖或数据库迁移，不添加变化日志。WSL Docker Node.js 24.22.1 构建、17 项单元测试及 21 项真实 PostgreSQL/Qdrant 集成测试通过，涵盖范围过滤、有效期、索引版本、九个 MCP 工具、权限和依赖失败；模型生命周期状态使用合成结果及真实线程未使用/退出验证，未重新运行真实模型推理。Tower 待部署，说明见 docs/api.md。
+
+- 分区发现与完整列表：本地新增 memory_namespaces（可按父路径发现有效分区及直属数量）和 memory_list（复用过滤、按创建时间和 ID 游标分页）；REST/MCP 共用 PostgreSQL 查询，无新增依赖、无分区权限隔离。WSL Docker Node.js 24.22.1 构建、13 项单元测试、20 项真实 PostgreSQL/Qdrant 集成测试通过，涵盖 105 条事实分页、微秒游标、编辑/删除、过滤与八个 MCP 工具发现；复用已安装依赖的测试镜像并挂载当前源码、配置与测试，npm ls 校验直接依赖版本通过。Tower 部署待完成，接口说明见 docs/api.md。
 
 - 分区总览：本地已实现自动置顶、长期有效期校验、core 优先返回及客户端维护规则；WSL Docker Node.js 24.22.1 构建、12 项单元测试、19 项真实 PostgreSQL/Qdrant 集成测试通过。本机 Codex 规则和技能已更新，Tower 部署与既有分区总览补建待完成。
 - 本地：WSL Ubuntu、Node.js 24.22.1 下构建、11 项单元测试、18 项真实 PostgreSQL/Qdrant 集成测试通过。最新清理涵盖事务复用、key 的 NFKC 规范化、索引任务原子登记及真实 CLI 重试验证。

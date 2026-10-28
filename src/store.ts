@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import { deleteSchema, memorySelector, rejectSecrets, writeSchema, AppError } from './validation.js';
-import { scopeSchema, scopeSql } from './scope.js';
+import { deleteSchema, memorySelector, rejectSecrets, writeSchema, AppError, namespacesSchema, listSchema, decodeListCursor } from './validation.js';
+import { scopeSchema, scopeSql, type MemoryScope } from './scope.js';
 import { transaction } from './db.js';
 
 export interface Memory {
@@ -10,6 +10,10 @@ export interface Memory {
   expires_at: string | null; version: number; deleted_at: string | null;
 }
 export const visible = "deleted_at IS NULL AND (expires_at IS NULL OR expires_at > now())";
+export interface MemoryStatistics {
+  memories: { active: number; pending: number; pinned: number; expired: number; last_updated_at: string | null };
+  index: { total: number; indexed: number; queued: number; failed: number; active_generation: string | null };
+}
 async function enqueue(client: PoolClient, id: string) {
   await client.query(`INSERT INTO index_jobs(memory_id) VALUES ($1)
     ON CONFLICT(memory_id) DO UPDATE SET attempts=0, failed=false, error_code=NULL, available_at=now()`, [id]);
@@ -19,6 +23,49 @@ async function sources(client: Pool | PoolClient, id: string) {
 }
 export class Store {
   constructor(public pool: Pool) {}
+  async statistics(data: MemoryScope, generation: string | null) {
+    const scope = scopeSql(data, 1);
+    // 同一 SQL 快照内统计；记忆范围由调用方指定，索引与任务反映整个实例。
+    return (await this.pool.query<MemoryStatistics>(`WITH scoped AS (
+      SELECT * FROM memories WHERE deleted_at IS NULL AND ${scope.sql}
+    ), valid AS (SELECT id,version FROM memories WHERE ${visible})
+    SELECT (SELECT json_build_object(
+      'active',count(*) FILTER (WHERE expires_at IS NULL OR expires_at>now())::int,
+      'pending',count(*) FILTER (WHERE (expires_at IS NULL OR expires_at>now()) AND verification='pending')::int,
+      'pinned',count(*) FILTER (WHERE (expires_at IS NULL OR expires_at>now()) AND pinned)::int,
+      'expired',count(*) FILTER (WHERE expires_at<=now())::int,
+      'last_updated_at',max(updated_at)) FROM scoped) AS memories,
+      (SELECT json_build_object('total',count(*)::int,
+        'indexed',count(*) FILTER (WHERE e.version=m.version)::int,
+        'queued',(SELECT count(*)::int FROM index_jobs WHERE NOT failed),
+        'failed',(SELECT count(*)::int FROM index_jobs WHERE failed),
+        'active_generation',(SELECT name FROM index_generations WHERE active))
+      FROM valid m LEFT JOIN index_entries e ON e.memory_id=m.id AND e.generation=$6) AS index`,
+    [...scope.values, generation])).rows[0]!;
+  }
+  async namespaces(input: unknown) {
+    const { parent } = namespacesSchema.parse(input);
+    const result = await this.pool.query<{ namespace: string; count: number }>(`SELECT namespace, count(*)::int AS count
+      FROM memories WHERE ${visible} AND ($1::text IS NULL OR namespace=$1 OR left(namespace,length($1)+1)=$1||'/')
+      GROUP BY namespace ORDER BY namespace COLLATE "C"`, [parent ?? null]);
+    return { namespaces: result.rows };
+  }
+  async list(input: unknown) {
+    const data = listSchema.parse(input);
+    const scope = scopeSql(data, 1);
+    const cursor = data.cursor ? decodeListCursor(data.cursor) : null;
+    // 保留 PostgreSQL 的微秒精度，避免 JS Date 截断时间后重复返回上一页末条。
+    const result = await this.pool.query<Memory & { cursor_created_at: string }>(`SELECT *,
+      to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
+      FROM memories WHERE ${visible} AND ${scope.sql}
+      AND ($6::timestamptz IS NULL OR (created_at,id)>($6::timestamptz,$7::uuid))
+      ORDER BY created_at,id LIMIT $8`, [...scope.values, cursor?.created_at ?? null, cursor?.id ?? null, data.limit + 1]);
+    const page = result.rows.slice(0, data.limit);
+    const last = page.at(-1);
+    const next_cursor = result.rows.length > data.limit && last
+      ? Buffer.from(JSON.stringify({ created_at: last.cursor_created_at, id: last.id })).toString('base64url') : null;
+    return { memories: page.map(({ cursor_created_at, ...memory }) => memory), next_cursor };
+  }
   async get(input: unknown) {
     const select = memorySelector.parse(input);
     const result = await this.pool.query<Memory>(`SELECT * FROM memories WHERE ${select.id ? 'id=$1' : 'key=$1 AND namespace=$2'} AND ${visible}`,

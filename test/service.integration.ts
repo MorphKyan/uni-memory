@@ -22,6 +22,7 @@ import { createOAuth } from '../src/oauth.js';
 import { collectionName, type Embedder } from '../src/embedding.js';
 import { organize } from '../src/organize.js';
 import { scopeSchema } from '../src/scope.js';
+import { MemoryStatus } from '../src/status.js';
 const globalScope = scopeSchema.parse({ namespaces: ['global'] });
 
 const connection = process.env.DATABASE_URL;
@@ -262,22 +263,177 @@ test('权限、过期与撤销、来源校验、Host/Origin、大小及凭据拒
   await pool.query('UPDATE client_tokens SET revoked_at=now() WHERE id=$1', [revoked.id]);
   assert.equal((await request('/v1/memories/core', revoked.token)).status, 401);
 });
-test('SDK 客户端完成 MCP 握手、六个工具发现、读写及工具权限', async () => {
+test('发现有效分区与直属数量，分页完整浏览、精度和过滤一致', async () => {
+  const parent = 'projects/browse-test';
+  const ids: string[] = [];
+  async function add(namespace: string, key: string, extra = {}) {
+    const result = await store.write('browse-test', { ...fact(key), namespace, ...extra });
+    const memory = result.memory as { id: string };
+    ids.push(memory.id); return memory.id;
+  }
+  try {
+    // 超过旧 core/search 的 50 条上限，固定为相同微秒时间验证 ID 次序和游标精度。
+    for (let i = 0; i < 105; i++) await add(parent, `detail.${i}`);
+    await pool.query("UPDATE memories SET created_at='2026-01-01T00:00:00.123456Z' WHERE id=ANY($1::uuid[])", [ids]);
+    const child = await add(`${parent}/child`, 'target', { tags: ['a', 'b'], type: 'decision', verification: 'pending' });
+    await add(`${parent}-other`, 'boundary');
+    await add(`${parent}/expired`, 'expired', { expires_at: '2020-01-01T00:00:00Z' });
+    const deleted = await add(`${parent}/deleted`, 'deleted');
+    await store.delete('browse-test', { id: deleted, expected_version: 1, idempotency_key: randomUUID() });
+    const expectedNamespaces = [{ namespace: parent, count: 105 }, { namespace: `${parent}/child`, count: 1 }];
+    assert.deepEqual(await (await request(`/v1/namespaces?parent=${parent}`)).json(), { namespaces: expectedNamespaces });
+    const all = await (await request('/v1/namespaces')).json();
+    assert.deepEqual(all.namespaces.filter((n: { namespace: string }) => n.namespace === parent || n.namespace.startsWith(`${parent}/`)), expectedNamespaces);
+    assert.deepEqual(await store.namespaces({ parent: 'projects/no-such-partition' }), { namespaces: [] });
+
+    const firstResponse = await request('/v1/memories/list', reader, { namespaces: [parent] });
+    assert.equal(firstResponse.status, 200);
+    const first = await firstResponse.json();
+    assert.equal(first.memories.length, 50);
+    assert(first.next_cursor);
+    assert.equal(first.memories[0].sources, undefined);
+    assert.equal(first.memories[0].cursor_created_at, undefined);
+    const lastId = first.memories.at(-1).id;
+    const old = await store.get({ id: lastId });
+    await store.write('browse-test', { ...fact(old.key, '已编辑的合成事实'), namespace: parent, expected_version: old.version });
+    // 下一页之前删除一条尚未返回的记录，不能造成 offset 式跳过其他记录。
+    const expected = (await pool.query('SELECT id FROM memories WHERE namespace=$1 ORDER BY created_at,id', [parent])).rows.map(row => row.id);
+    const removed = expected.at(-1)!;
+    await store.delete('browse-test', { id: removed, expected_version: 1, idempotency_key: randomUUID() });
+    const seen = first.memories.map((m: { id: string }) => m.id);
+    let cursor = first.next_cursor;
+    while (cursor) {
+      const page = await (await request('/v1/memories/list', reader, { namespaces: [parent], cursor })).json();
+      assert(page.memories.length > 0);
+      seen.push(...page.memories.map((m: { id: string }) => m.id));
+      assert(seen.length <= 105, '游标必须向前推进');
+      cursor = page.next_cursor;
+    }
+    assert.deepEqual(seen, expected.filter(id => id !== removed));
+    const scope = { namespaces: [parent], include_descendants: true, tags: ['a', 'b'], type: 'decision', verification: 'pending' };
+    const filtered = await (await request('/v1/memories/list', reader, scope)).json();
+    assert.deepEqual(filtered.memories.map((m: { id: string }) => m.id), [child]);
+    assert.equal(filtered.next_cursor, null);
+    for (const override of [{ include_descendants: false }, { tags: ['a', 'missing'] }, { type: 'fact' }, { verification: 'confirmed' }]) {
+      assert.deepEqual(await store.list({ ...scope, ...override }), { memories: [], next_cursor: null });
+    }
+    const subtree = await store.list({ namespaces: [parent], include_descendants: true, limit: 100 });
+    assert.equal(subtree.memories.length, 100);
+    const end = await store.list({ namespaces: [parent], include_descendants: true, limit: 100, cursor: subtree.next_cursor });
+    assert.equal(end.memories.length, 5);
+    assert.deepEqual(end.memories.map(m => m.id), [...expected.filter(id => id !== removed).slice(100), child]);
+    assert.equal(end.next_cursor, null);
+    for (const body of [{}, { namespaces: [parent], limit: 101 }, { namespaces: [parent], cursor: 'bm90LWpzb24' }, { namespaces: [parent], cursor: 'e30' }]) {
+      assert.equal((await request('/v1/memories/list', reader, body)).status, 400);
+    }
+    assert.equal((await request('/v1/namespaces?parent=projects/')).status, 400);
+    assert.equal((await fetch(`${base}/v1/namespaces`)).status, 401);
+    assert.equal((await fetch(`${base}/v1/memories/list`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ namespaces: [parent] }) })).status, 401);
+  } finally {
+    // 仅清理由本用例建立的合成事实，避免后续索引测试处理大量额外记录。
+    await pool.query('DELETE FROM memory_sources WHERE memory_id=ANY($1::uuid[])', [ids]);
+    await pool.query('DELETE FROM memory_events WHERE memory_id=ANY($1::uuid[])', [ids]);
+    await pool.query('DELETE FROM index_jobs WHERE memory_id=ANY($1::uuid[])', [ids]);
+    await pool.query('DELETE FROM idempotency WHERE memory_id=ANY($1::uuid[])', [ids]);
+    await pool.query('DELETE FROM memories WHERE id=ANY($1::uuid[])', [ids]);
+  }
+});
+
+test('status 统计分区与有效期、版本索引和任务状态，REST 沿用读取权限', async () => {
+  const parent = 'projects/status-test';
+  const ids: string[] = [];
+  const embedder = syntheticEmbedder('synthetic-status-statistics');
+  const generation = collectionName(embedder);
+  async function add(namespace: string, key: string, extra = {}) {
+    const result = await store.write('status-test', { ...fact(key), namespace, ...extra });
+    const memory = result.memory as { id: string };
+    ids.push(memory.id); return memory.id;
+  }
+  try {
+    const id = await add(parent, 'active', { pinned: true, verification: 'pending', tags: ['status'] });
+    await add(`${parent}/child`, 'child');
+    await add(`${parent}-other`, 'boundary');
+    await add(parent, 'expired', { expires_at: '2020-01-01T00:00:00Z' });
+    const deleted = await add(parent, 'deleted');
+    await store.delete('status-test', { id: deleted, expected_version: 1, idempotency_key: randomUUID() });
+    const response = await request(`/v1/status?namespaces=${parent}&include_descendants=false`);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.status, 'degraded');
+    assert.equal(result.database, 'ok'); assert.equal(result.qdrant, 'ok');
+    assert.equal(result.embedding.state, 'disabled'); assert.equal(result.search_mode, 'keyword');
+    assert.deepEqual({ ...result.memories, last_updated_at: null }, { active: 1, pending: 1, pinned: 1, expired: 1, last_updated_at: null });
+    assert(Number.isFinite(Date.parse(result.memories.last_updated_at)));
+    assert.equal((await (await request(`/v1/status?namespaces=${parent}&include_descendants=true`)).json()).memories.active, 2);
+    assert.equal((await (await request(`/v1/status?namespaces=${parent}&namespaces=${parent}/child`)).json()).memories.active, 2);
+    assert.equal((await (await request(`/v1/status?namespaces=${parent}&tags=status&type=fact&verification=pending`)).json()).memories.active, 1);
+    assert.equal((await (await request(`/v1/status?namespaces=${parent}&verification=confirmed`)).json()).memories.active, 0);
+    const empty = await (await request('/v1/status?namespaces=projects/no-such-status')).json();
+    assert.deepEqual(empty.memories, { active: 0, pending: 0, pinned: 0, expired: 0, last_updated_at: null });
+    for (const suffix of ['', '?namespaces=global&include_descendants=0', '?namespaces=global&extra=1']) {
+      assert.equal((await request(`/v1/status${suffix}`)).status, 400);
+    }
+    assert.equal((await fetch(`${base}/v1/status?namespaces=global`)).status, 401);
+    const writeOnly = await issueToken(pool, 'status-write-only', ['memory:write']);
+    assert.equal((await request(`/v1/status?namespaces=${parent}`, writeOnly.token)).status, 403);
+    assert.equal((await request(`/v1/status?namespaces=${parent}`, admin)).status, 200);
+
+    await pool.query('INSERT INTO index_generations(name,model,dtype,dimensions) VALUES($1,$2,$3,$4)',
+      [generation, embedder.model, embedder.dtype, embedder.dimensions]);
+    await pool.query('INSERT INTO index_entries(generation,memory_id,version) VALUES($1,$2,1)', [generation, id]);
+    const service = new MemoryStatus(store, qdrant, embedder);
+    const indexed = await service.get({ namespaces: [parent] });
+    assert.equal(indexed.index?.indexed, 1);
+    assert.equal(indexed.index?.queued, result.index.queued);
+    await pool.query('UPDATE memories SET version=version+1 WHERE id=$1', [id]);
+    await pool.query('UPDATE index_jobs SET failed=true WHERE memory_id=$1', [id]);
+    const stale = await service.get({ namespaces: [parent] });
+    assert.equal(stale.index?.indexed, 0);
+    assert.equal(stale.index?.failed, result.index.failed + 1);
+    assert.equal(stale.index?.queued, result.index.queued - 1);
+    assert(!JSON.stringify(stale).includes('合成事实'));
+  } finally {
+    await pool.query('DELETE FROM index_generations WHERE name=$1', [generation]);
+    for (const table of ['index_jobs', 'idempotency', 'memory_events', 'memory_sources']) {
+      await pool.query(`DELETE FROM ${table} WHERE memory_id=ANY($1::uuid[])`, [ids]);
+    }
+    await pool.query('DELETE FROM memories WHERE id=ANY($1::uuid[])', [ids]);
+  }
+});
+
+test('SDK 客户端完成 MCP 握手、九个工具发现、读写及工具权限', async () => {
   for (const token of [writer, reader]) {
     const client = new Client({ name: 'synthetic-client', version: '1' });
     try {
       await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
-      const list = await client.listTools(); assert.equal(list.tools.length, 6);
+      const list = await client.listTools(); assert.equal(list.tools.length, 9);
       assert(client.getInstructions()?.includes('Shared Memory Policy v1'));
       const writeTool = list.tools.find(t => t.name === 'memory_write')!;
       for (const field of ['namespace', 'type', 'verification']) assert(writeTool.inputSchema.required?.includes(field));
       const result = await client.callTool({ name: 'memory_write', arguments: fact() });
       assert.equal(!!result.isError, token === reader);
       const core = await client.callTool({ name: 'memory_core', arguments: { namespaces: ['global'] } }); assert(!core.isError);
+      for (const [name, args] of [['memory_namespaces', {}], ['memory_list', { namespaces: ['global'], limit: 1 }]] as const) {
+        assert.equal(list.tools.find(t => t.name === name)?.annotations?.readOnlyHint, true);
+        const result = await client.callTool({ name, arguments: args });
+        assert(!result.isError);
+        const content = result.content as { type: string; text: string }[];
+        const data = JSON.parse(content[0]!.text);
+        assert(Array.isArray(name === 'memory_namespaces' ? data.namespaces : data.memories));
+      }
+      assert((await client.callTool({ name: 'memory_list', arguments: { namespaces: ['global'], cursor: 'bm90LWpzb24' } })).isError);
+      assert.equal(list.tools.find(t => t.name === 'memory_status')?.annotations?.readOnlyHint, true);
+      const status = await client.callTool({ name: 'memory_status', arguments: { namespaces: ['global'] } });
+      assert(!status.isError);
+      const data = JSON.parse((status.content as { text: string }[])[0]!.text);
+      assert.equal(data.database, 'ok'); assert.equal(data.embedding.state, 'disabled');
+      assert.equal(typeof data.memories.active, 'number');
+      assert((await client.callTool({ name: 'memory_status', arguments: {} })).isError);
     } finally { await client.close(); }
   }
 });
 const syntheticEmbedder = (model = 'synthetic-test-only'): Embedder => ({ model, dtype: 'test', dimensions: 3,
+  status: { state: 'ready', error_code: null },
   embed: async texts => texts.map(() => [1, 0, 0]),
 });
 test('真实 Qdrant 索引、旧版本过滤、失败重试、重启恢复和模型集合切换', async () => {
@@ -289,8 +445,12 @@ test('真实 Qdrant 索引、旧版本过滤、失败重试、重启恢复和模
   for (let i = 0; i < 60 && (await pool.query('SELECT 1 FROM index_jobs')).rowCount; i++) await indexer.tick();
   const generation = collectionName(embedder);
   assert.equal((await pool.query('SELECT name FROM index_generations WHERE active')).rows[0]?.name, generation);
+  const status = new MemoryStatus(store, qdrant, embedder);
+  assert.equal((await status.get({ namespaces: ['global'] })).status, 'ok');
   assert((await qdrant.search(generation, [1, 0, 0], 100, globalScope)).some(row => row.id === memory.id));
   await store.write('test', { ...fact(input.key, 'vector 更新'), expected_version: 1 });
+  const indexing = await status.get({ namespaces: ['global'] });
+  assert.equal(indexing.status, 'degraded'); assert.equal(indexing.search_mode, 'hybrid');
   const search = await new Search(store, qdrant, embedder).search({ namespaces: ['global'], query: '不存在的词语' });
   assert(!search.memories.some(row => row.id === memory.id));
   const broken = new Qdrant({ qdrantUrl: 'http://127.0.0.1:1', qdrantKey: undefined });
