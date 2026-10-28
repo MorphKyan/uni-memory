@@ -3,7 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import type { Pool } from 'pg';
 import { transaction } from './db.js';
 
-export interface Migration {
+interface Migration {
   name: string;
   sql: string;
   checksum: string;

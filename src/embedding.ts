@@ -10,7 +10,6 @@ export type ModelName = keyof typeof models;
 export interface Embedder {
   model: string; dtype: string; dimensions: number;
   embed(texts: string[], query?: boolean): Promise<number[][]>;
-  close(): Promise<unknown>;
 }
 export function collectionName(embedder: Pick<Embedder, 'model' | 'dtype' | 'dimensions'>) {
   return `uni_mem_${createHash('sha256').update(`${embedder.model}:${embedder.dtype}:${embedder.dimensions}`).digest('hex').slice(0, 20)}`;
@@ -54,5 +53,5 @@ export class EmbeddingWorker implements Embedder {
       this.worker.postMessage({ id, texts, query });
     });
   }
-  async close() { await this.worker.terminate(); }
+  close() { return this.worker.terminate(); }
 }

@@ -243,7 +243,7 @@ test('SDK 客户端完成 MCP 握手、六个工具发现、读写及工具权�
   }
 });
 const syntheticEmbedder = (model = 'synthetic-test-only'): Embedder => ({ model, dtype: 'test', dimensions: 3,
-  embed: async texts => texts.map(() => [1, 0, 0]), close: async () => {},
+  embed: async texts => texts.map(() => [1, 0, 0]),
 });
 test('真实 Qdrant 索引、旧版本过滤、失败重试、重启恢复和模型集合切换', async () => {
   const embedder = syntheticEmbedder();
@@ -262,7 +262,14 @@ test('真实 Qdrant 索引、旧版本过滤、失败重试、重启恢复和模
   await assert.rejects(new Indexer(pool, broken, embedder).tick());
   assert.equal((await pool.query('SELECT attempts FROM index_jobs WHERE memory_id=$1', [memory.id])).rows[0]?.attempts, 1);
   const restarted = new Indexer(pool, qdrant, embedder);
-  await restarted.retry();
+  await pool.query("UPDATE index_jobs SET attempts=10,failed=true,error_code='index_failed',available_at=now()+interval '1 hour' WHERE memory_id=$1", [memory.id]);
+  const retry = spawnSync(process.execPath, [fileURLToPath(new URL('../src/cli.js', import.meta.url)), 'retry'], {
+    env: { ...process.env, DATABASE_URL: connection }, encoding: 'utf8', timeout: 15000,
+  });
+  assert.equal(retry.error, undefined);
+  assert.equal(retry.status, 0, retry.stderr);
+  const job = (await pool.query('SELECT attempts,failed,error_code,available_at<=now() AS ready FROM index_jobs WHERE memory_id=$1', [memory.id])).rows[0];
+  assert.deepEqual(job, { attempts: 0, failed: false, error_code: null, ready: true });
   await restarted.tick();
   const fresh = await qdrant.search(generation, [1, 0, 0], 100, globalScope);
   assert.equal(fresh.find(row => row.id === memory.id)?.payload.version, 2);

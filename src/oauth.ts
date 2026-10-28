@@ -8,7 +8,7 @@ import type { Config } from './config.js';
 import { passwordMatches } from './auth.js';
 import { AppError } from './validation.js';
 
-export function oauthAdapter(pool: Pool) {
+function oauthAdapter(pool: Pool) {
   return class Adapter {
     constructor(private model: string) {}
     async upsert(id: string, payload: Record<string, unknown>, expiresIn: number) {
