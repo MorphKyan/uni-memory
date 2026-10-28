@@ -10,7 +10,6 @@ services:
       DATABASE_URL: postgresql://uni_memory:${POSTGRES_PASSWORD}@postgres:5432/uni_memory_test
       OAUTH_ENABLED: "false"
       EMBEDDING_MODEL: ""
-      TEST_DATABASE: uni_memory_test
     ports: !reset []
     read_only: false
     restart: "no"

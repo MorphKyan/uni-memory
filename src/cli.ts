@@ -1,11 +1,10 @@
-import { createPool } from './db.js';
+import { createPool, transaction } from './db.js';
 import { config } from './config.js';
 import { issueToken, passwordHash } from './auth.js';
 import { Store } from './store.js';
 import { Indexer } from './indexer.js';
 import { Qdrant } from './qdrant.js';
 import { organize } from './organize.js';
-import { transaction } from './store.js';
 import { AppError } from './validation.js';
 
 const [command, ...args] = process.argv.slice(2);

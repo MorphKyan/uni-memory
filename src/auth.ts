@@ -5,7 +5,6 @@ import type Provider from 'oidc-provider';
 import { AppError } from './validation.js';
 
 export interface Identity { clientId: string; scopes: string[] }
-export function hashToken(token: string) { return createHash('sha256').update(token).digest('hex'); }
 export function passwordHash(password: string) {
   if (password.length < 16 || password.length > 1024) throw new Error('口令须为 16–1024 字符');
   const salt = randomBytes(16).toString('hex');
@@ -27,7 +26,7 @@ export async function issueToken(pool: Pool, clientId: string, scopes: string[],
   const token = randomBytes(32).toString('base64url');
   const id = randomUUID();
   await pool.query('INSERT INTO client_tokens(id,client_id,token_hash,scopes,expires_at) VALUES($1,$2,$3,$4,now()+$5*interval \'1 day\')',
-    [id, clientId, hashToken(token), scopes, days]);
+    [id, clientId, createHash('sha256').update(token).digest('hex'), scopes, days]);
   return { id, token };
 }
 export function authentication(pool: Pool, resource: string, provider?: Provider): RequestHandler {
@@ -35,7 +34,7 @@ export function authentication(pool: Pool, resource: string, provider?: Provider
     try {
       const token = /^Bearer ([A-Za-z0-9._~-]{20,4096})$/.exec(req.headers.authorization ?? '')?.[1];
       if (!token) throw new AppError(401, 'authentication_required');
-      const row = (await pool.query('SELECT client_id,scopes FROM client_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()', [hashToken(token)])).rows[0];
+      const row = (await pool.query('SELECT client_id,scopes FROM client_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()', [createHash('sha256').update(token).digest('hex')])).rows[0];
       let identity: Identity | undefined = row && { clientId: row.client_id, scopes: row.scopes };
       if (!identity && provider) {
         const access = await provider.AccessToken.find(token);

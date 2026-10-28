@@ -23,7 +23,7 @@ export class EmbeddingWorker implements Embedder {
   private pending = new Map<number, { resolve: (value: number[][]) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private failed = false;
   failure?: string;
-  constructor(public name: ModelName, public dtype: string = models[name]?.dtype, cache = './.cache/models') {
+  constructor(name: ModelName, public dtype: string = models[name]?.dtype, cache = './.cache/models') {
     if (!Object.hasOwn(models, name) || !['q8', 'q4', 'fp32'].includes(dtype)) throw new Error('未知 embedding 模型或精度');
     const spec = models[name];
     this.model = spec.repo;

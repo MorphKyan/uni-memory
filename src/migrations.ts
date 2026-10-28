@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import type { Pool } from 'pg';
+import { transaction } from './db.js';
 
 export interface Migration {
   name: string;
@@ -37,10 +38,7 @@ export function pendingMigrations(migrations: Migration[], applied: { name: stri
 }
 
 export async function migrate(pool: Pool, migrations: Migration[]) {
-  const client = await pool.connect();
-  let discard = false;
-  try {
-    await client.query('BEGIN');
+  return transaction(pool, async client => {
     await client.query('SELECT pg_advisory_xact_lock(170041, 1)');
     await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
       name text PRIMARY KEY,
@@ -56,12 +54,6 @@ export async function migrate(pool: Pool, migrations: Migration[]) {
       await client.query('INSERT INTO schema_migrations (name, checksum) VALUES ($1, $2)',
         [file.name, file.checksum]);
     }
-    await client.query('COMMIT');
     return pending.map(file => file.name);
-  } catch (error) {
-    try { await client.query('ROLLBACK'); } catch { discard = true; }
-    throw error;
-  } finally {
-    client.release(discard);
-  }
+  });
 }

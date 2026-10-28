@@ -13,7 +13,7 @@ export async function organize(store: Store, cfg: Config, ids: string[], timeout
   if (JSON.stringify(facts).length > 16000) throw new AppError(413, 'organize_input_too_large');
   rejectSecrets(facts);
   const url = new URL(`${cfg.llmBase.replace(/\/$/, '')}/chat/completions`);
-  if (url.protocol !== 'https:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) throw new AppError(400, 'unsafe_llm_url');
+  if (url.protocol !== 'https:' && (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))) throw new AppError(400, 'unsafe_llm_url');
   const response = await fetch(url, {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeout),
     headers: { Authorization: `Bearer ${cfg.llmKey}`, 'Content-Type': 'application/json' },

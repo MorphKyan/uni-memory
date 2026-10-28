@@ -22,7 +22,6 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
     qdrantUrl: env.QDRANT_URL ?? 'http://127.0.0.1:6333',
     qdrantKey: env.QDRANT_API_KEY,
     model: env.EMBEDDING_MODEL || undefined,
-    dtype: env.EMBEDDING_DTYPE ?? 'q8',
     modelCache: env.MODEL_CACHE ?? './.cache/models',
     oauthEnabled: env.OAUTH_ENABLED === 'true',
     ownerHash: env.OWNER_PASSWORD_HASH,

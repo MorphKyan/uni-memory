@@ -25,7 +25,3 @@ export function scopeSql(scope: MemoryScope, start: number) {
     values: [scope.namespaces, scope.include_descendants, scope.tags, scope.type ?? null, scope.verification ?? null],
   };
 }
-
-export function namespacePaths(namespace: string) {
-  return namespace.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/'));
-}

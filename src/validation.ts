@@ -4,8 +4,7 @@ import { namespaceSchema, memoryType, verificationSchema, scopeShape } from './s
 export class AppError extends Error {
   constructor(public status: number, public code: string) { super(code); }
 }
-export const text = (max: number) => z.string().trim().min(1).max(max);
-export const identifier = text(160);
+const identifier = z.string().trim().min(1).max(160);
 export const memorySelector = z.object({ id: z.uuid().optional(), key: identifier.optional(), namespace: namespaceSchema.optional() })
   .strict().refine(value => value.id ? !value.key && !value.namespace : !!value.key && !!value.namespace,
     '提供 id，或 namespace 和 key');
@@ -14,20 +13,20 @@ export const writeSchema = z.object({
   type: memoryType,
   verification: verificationSchema,
   key: identifier,
-  content: text(4000),
-  tags: z.array(text(64)).max(20).default([]),
+  content: z.string().trim().min(1).max(4000),
+  tags: scopeShape.tags,
   pinned: z.boolean().default(false),
   expires_at: z.iso.datetime({ offset: true }).nullable().default(null),
-  source: z.object({ reference: text(512), excerpt: z.string().trim().max(512).default('') }).strict(),
+  source: z.object({ reference: z.string().trim().min(1).max(512), excerpt: z.string().trim().max(512).default('') }).strict(),
   expected_version: z.number().int().positive().optional(),
-  idempotency_key: text(160),
+  idempotency_key: identifier,
 }).strict();
 export const deleteSchema = z.object({
-  id: z.uuid(), expected_version: z.number().int().positive(), idempotency_key: text(160),
+  id: z.uuid(), expected_version: z.number().int().positive(), idempotency_key: identifier,
 }).strict();
 export const searchSchema = z.object({
   ...scopeShape,
-  query: text(512), limit: z.number().int().min(1).max(50).default(10),
+  query: z.string().trim().min(1).max(512), limit: z.number().int().min(1).max(50).default(10),
 }).strict();
 export function rejectSecrets(value: unknown) {
   const string = JSON.stringify(value);
