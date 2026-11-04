@@ -10,6 +10,7 @@ services:
       QDRANT_URL: http://qdrant:6333
       MODEL_CACHE: /models
       OAUTH_JWKS_PATH: /secrets/jwks.json
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     ports:
       - "127.0.0.1:${APP_PORT:-3000}:3000"
     volumes:

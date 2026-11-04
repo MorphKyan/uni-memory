@@ -6,7 +6,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createPool } from '../src/db.js';
@@ -54,6 +54,48 @@ after(async () => {
   await pool.end();
 });
 
+test('管理台密码会话在真实数据库完成读写、版本冲突、来源历史和删除', async () => {
+  const password = 'synthetic-admin-integration-passphrase';
+  const ui = createApp({ cfg: { ...cfg, adminPassword: password }, store, qdrant, search: new Search(store, qdrant) });
+  const local = ui.listen(0, '127.0.0.1'); await once(local, 'listening');
+  const address = local.address(); assert(address && typeof address !== 'string');
+  const root = `http://127.0.0.1:${address.port}`;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', Origin: cfg.publicUrl, 'X-Uni-Memory-UI': '1' };
+  const post = (path: string, body: unknown) => fetch(`${root}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+  let memory: { id: string; version: number } | undefined;
+  try {
+    const login = await post('/ui/login', { password }); assert.equal(login.status, 200);
+    headers.Cookie = login.headers.getSetCookie()[0]!.split(';')[0]!;
+    headers['X-CSRF-Token'] = (await login.json() as { csrf: string }).csrf;
+    const input = { ...fact(`synthetic.web.${randomUUID()}`), namespace: 'projects/ui-synthetic', tags: ['ui-test'] };
+    const created = await post('/v1/memories', input); assert.equal(created.status, 201);
+    const result = await created.json() as { memory: { id: string; version: number; sources: { client_id: string }[] } };
+    memory = result.memory; assert.equal(result.memory.sources[0]!.client_id, 'web-admin');
+    const list = await post('/v1/memories/list', { namespaces: [input.namespace] }); assert.equal(list.status, 200);
+    assert((await list.json() as { memories: { id: string }[] }).memories.some(item => item.id === memory!.id));
+    const update = await post('/v1/memories', { ...input, content: '合成 UI 修改后的事实。', expected_version: memory.version, idempotency_key: randomUUID() });
+    assert.equal(update.status, 200); memory = (await update.json() as { memory: typeof memory }).memory!;
+    assert.equal(memory.version, 2);
+    const stale = await post('/v1/memories', { ...input, content: '合成旧版本修改。', expected_version: 1, idempotency_key: randomUUID() });
+    assert.equal(stale.status, 409);
+    const events = await fetch(`${root}/v1/memories/history?id=${memory.id}`, { headers });
+    assert.equal((await events.json() as unknown[]).length, 2);
+    const removed = await post('/v1/memories/delete', { id: memory.id, expected_version: memory.version, idempotency_key: randomUUID() });
+    assert.equal(removed.status, 200);
+    assert.equal((await fetch(`${root}/v1/memories?id=${memory.id}`, { headers })).status, 404);
+    assert.equal((await pool.query('SELECT 1 FROM memory_events WHERE memory_id=$1 UNION ALL SELECT 1 FROM memory_sources WHERE memory_id=$1', [memory.id])).rowCount, 0);
+    memory = undefined;
+    assert.equal((await post('/ui/logout', {})).status, 204);
+    assert.equal((await fetch(`${root}/v1/namespaces`, { headers })).status, 401);
+  } finally {
+    if (memory) {
+      const current = await store.get({ id: memory.id });
+      await store.delete('web-admin', { id: current.id, expected_version: current.version, idempotency_key: randomUUID() });
+    }
+    await new Promise<void>(resolve => { local.close(() => resolve()); local.closeAllConnections(); });
+  }
+});
+
 test('真实数据库迁移可重复执行，健康检查区分依赖', async () => {
   assert.deepEqual(await migrate(pool, await readMigrations(new URL('../../migrations/', import.meta.url))), []);
   const health = await fetch(`${base}/healthz`);
@@ -99,15 +141,18 @@ test('分区总览隔离、优先返回并沿用版本冲突与删除规则', as
   await pool.query('DELETE FROM memories WHERE id=ANY($1::uuid[])', [ids]);
 });
 
-test('启动阶段 OAuth 配置失败时关闭已创建的推理线程并退出', () => {
-  const child = spawnSync(process.execPath, [fileURLToPath(new URL('../src/main.js', import.meta.url))], {
+test('启动阶段 OAuth 配置失败时关闭已创建的推理线程并退出', async () => {
+  // 不阻塞测试 HTTP 服务的事件循环，避免子进程运行期间 keep-alive 连接失效。
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/main.js', import.meta.url))], {
     env: { ...process.env, DATABASE_URL: connection, PUBLIC_URL: 'http://127.0.0.1:3000',
       EMBEDDING_MODEL: 'gemma2', EMBEDDING_DTYPE: 'q4', OAUTH_ENABLED: 'true', OWNER_PASSWORD_HASH: '', OAUTH_COOKIE_KEY: '' },
-    encoding: 'utf8', timeout: 15000,
+    stdio: ['ignore', 'ignore', 'pipe'], timeout: 15000,
   });
-  assert.equal(child.error, undefined);
-  assert.equal(child.status, 1);
-  assert.match(child.stderr, /启动失败/);
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const [code] = await once(child, 'close');
+  assert.equal(code, 1);
+  assert.match(stderr, /启动失败/);
 });
 test('跨客户端读取、来源身份、幂等、来源合并和显式纠正', async () => {
   const input = fact();
@@ -401,6 +446,30 @@ test('status 统计分区与有效期、版本索引和任务状态，REST 沿�
   }
 });
 
+test('MCP 2026 协议发现、九工具和调用保留认证与权限校验', async () => {
+  const meta = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
+  const call = (method: string, params: { name?: string; arguments?: unknown } = {}, token = reader) => request('/mcp', token,
+    { jsonrpc: '2.0', id: 1, method, params: { ...params, _meta: meta } },
+    { Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': method,
+      ...(params.name ? { 'Mcp-Name': params.name } : {}) });
+  assert.equal((await call('server/discover', {}, 'invalid')).status, 401);
+  const discovered = await call('server/discover');
+  assert.equal(discovered.status, 200, await discovered.clone().text());
+  const discovery = (await discovered.json()).result;
+  assert.equal(discovery.resultType, 'complete');
+  assert(discovery.supportedVersions.includes('2026-07-28'));
+  assert(discovery.instructions.includes('Shared Memory Policy v1'));
+  const tools = await call('tools/list');
+  assert.equal(tools.status, 200);
+  assert.equal((await tools.json()).result.tools.length, 9);
+  const result = (await (await call('tools/call', { name: 'memory_status', arguments: { namespaces: ['global'] } })).json()).result;
+  assert.equal(result.resultType, 'complete');
+  assert(!result.isError);
+  assert.equal(JSON.parse(result.content[0].text).database, 'ok');
+  const denied = (await (await call('tools/call', { name: 'memory_write', arguments: fact() })).json()).result;
+  assert(denied.isError);
+});
+
 test('SDK 客户端完成 MCP 握手、九个工具发现、读写及工具权限', async () => {
   for (const token of [writer, reader]) {
     const client = new Client({ name: 'synthetic-client', version: '1' });
@@ -658,6 +727,9 @@ test('OAuth 实际授权码/PKCE、登录 CSRF、资源和回调校验、刷新�
   try {
     const metadata = await (await http('/oauth/.well-known/oauth-authorization-server')).json();
     assert(metadata.code_challenge_methods_supported.includes('S256'));
+    const canonicalMetadata = await http('/.well-known/oauth-authorization-server/oauth');
+    assert.equal(canonicalMetadata.status, 200);
+    assert.deepEqual(await canonicalMetadata.json(), metadata);
     const badCallback = await http(`/oauth/auth?${new URLSearchParams({ client_id: 'synthetic-chatgpt', redirect_uri: 'https://attacker.invalid', response_type: 'code', scope: 'openid' })}`);
     assert.equal(badCallback.status, 400);
     const badResource = await http(`/oauth/auth?${new URLSearchParams({ client_id: 'synthetic-chatgpt', redirect_uri: `${origin}/callback`, response_type: 'code', scope: 'openid', resource: 'https://attacker.invalid', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256' })}`);

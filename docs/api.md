@@ -1,6 +1,6 @@
 # 服务接口
 
-所有 `/v1` 与 `/mcp` 请求都需要 `Authorization: Bearer ...`。身份由服务端令牌确定；请求中不允许 `client_id`。`memory:admin` 包含读写权限。
+客户端 `/v1` 与 `/mcp` 请求使用 `Authorization: Bearer ...`。浏览器管理台可通过 `ADMIN_PASSWORD` 登录后的 Cookie 会话调用 `/v1`，POST 需附带会话 CSRF Token；Cookie 不用于 `/mcp`。身份由服务端确定；请求中不允许 `client_id`。`memory:admin` 包含读写权限。管理台接口与部署见 [管理台](admin-ui.md)。
 
 | REST | 权限 | MCP |
 | --- | --- | --- |

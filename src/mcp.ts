@@ -9,7 +9,7 @@ import { sharedMemoryPolicy } from './policy.js';
 import type { MemoryStatus } from './status.js';
 
 export function createMcpServer(store: Store, search: Search, status: MemoryStatus, identity: Identity) {
-  const server = new McpServer({ name: 'uni-memory', version: '0.2.0' }, {
+  const server = new McpServer({ name: 'uni-memory', version: '0.3.0' }, {
     instructions: sharedMemoryPolicy,
   });
   function tool(name: string, description: string, schema: z.ZodType, scope: string, run: (input: unknown) => Promise<unknown>) {

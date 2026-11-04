@@ -1,6 +1,7 @@
 import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
 import { hostHeaderValidation } from '@modelcontextprotocol/express';
-import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import { createMcpHandler } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type Provider from 'oidc-provider';
 import type { Config } from './config.js';
@@ -13,6 +14,7 @@ import type { Search } from './search.js';
 import type { Qdrant } from './qdrant.js';
 import type { Embedder } from './embedding.js';
 import { MemoryStatus } from './status.js';
+import { mountAdmin } from './admin.js';
 
 interface Services { store: Store; search: Search; qdrant: Qdrant; cfg: Config; provider?: Provider; embedder?: Embedder }
 export function rateLimit(limit: number, windowMs = 60000): RequestHandler {
@@ -39,6 +41,11 @@ export function createApp(services: Services) {
   if (cfg.trustProxy.length) app.set('trust proxy', cfg.trustProxy);
   app.use(hostHeaderValidation(cfg.allowedHosts));
   app.use((req, res, next) => {
+    // 本服务不使用转发 Host；Koa OAuth 也只能看到 Express 已核实来源的协议。
+    const protocol = req.protocol;
+    delete req.headers['x-forwarded-host'];
+    req.headers['x-forwarded-proto'] = protocol;
+    if (cfg.publicUrl.startsWith('https:') && req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
@@ -59,8 +66,9 @@ export function createApp(services: Services) {
     res.json({ resource: cfg.resource, authorization_servers: provider ? [`${cfg.publicUrl}/oauth`] : [], scopes_supported: ['memory:read', 'memory:write'], bearer_methods_supported: ['header'] });
   });
   if (provider) mountOAuth(app, provider, cfg);
+  app.use('/v1', mountAdmin(app, cfg, rateLimit(5)));
   const auth = authentication(store.pool, cfg.resource, provider);
-  app.use(['/v1', '/mcp'], auth, express.json({ limit: '32kb', strict: true }));
+  app.use(['/v1', '/mcp'], (req, res, next) => res.locals.identity ? next() : auth(req, res, next), express.json({ limit: '32kb', strict: true }));
   function scope(name: string): RequestHandler {
     return (_req, res, next) => { requireScope(res.locals.identity as Identity, name); next(); };
   }
@@ -91,10 +99,15 @@ export function createApp(services: Services) {
     res.json((await store.pool.query('SELECT memory_id,attempts,failed,available_at,error_code FROM index_jobs ORDER BY available_at LIMIT 100')).rows);
   });
   app.post('/mcp', async (req, res) => {
-    const server = createMcpServer(store, search, status, res.locals.identity);
-    const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-    try { await server.connect(transport); await transport.handleRequest(req, res, req.body); }
-    finally { await server.close(); }
+    if (['server/discover', 'initialize', 'notifications/initialized', 'tools/list', 'tools/call', 'resources/list', 'prompts/list'].includes(req.body?.method)) {
+      res.on('finish', () => console.info(JSON.stringify({ event: 'mcp_discovery', method: req.body.method, status: res.statusCode,
+        client: (res.locals.identity as Identity).clientId,
+        protocol: /^\d{4}-\d{2}-\d{2}$/.test(req.headers['mcp-protocol-version'] as string) ? req.headers['mcp-protocol-version']
+          : /^\d{4}-\d{2}-\d{2}$/.test(req.body?.params?.protocolVersion) ? req.body.params.protocolVersion : undefined })));
+    }
+    const handler = createMcpHandler(() => createMcpServer(store, search, status, res.locals.identity));
+    try { await toNodeHandler(handler)(req, res, req.body); }
+    finally { await handler.close(); }
   });
   app.all('/mcp', (_req, res) => { res.setHeader('Allow', 'POST'); res.status(405).end(); });
   app.use((_req, res) => { res.status(404).json({ error: 'not_found' }); });

@@ -1,4 +1,5 @@
-import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import type { Pool } from 'pg';
 import type { RequestHandler } from 'express';
 import type Provider from 'oidc-provider';
@@ -10,11 +11,20 @@ export function passwordHash(password: string) {
   const salt = randomBytes(16).toString('hex');
   return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`;
 }
-export function passwordMatches(password: string, encoded: string) {
+const scryptAsync = promisify(scrypt);
+let passwordChecks = 0;
+export async function derivePassword(password: string, salt: string | Buffer) {
+  // 不排队堆积匿名登录请求，给数据库等工作留出线程池容量。
+  if (passwordChecks >= 2) throw new AppError(503, 'password_check_busy');
+  passwordChecks++;
+  try { return await scryptAsync(password, salt, 64) as Buffer; }
+  finally { passwordChecks--; }
+}
+export async function passwordMatches(password: string, encoded: string) {
   if (password.length > 1024) return false;
   const [salt, hex] = encoded.split(':');
   if (!salt || !hex || !/^[0-9a-f]{32}$/.test(salt) || !/^[0-9a-f]{128}$/.test(hex)) return false;
-  return timingSafeEqual(scryptSync(password, salt, 64), Buffer.from(hex, 'hex'));
+  return timingSafeEqual(await derivePassword(password, salt), Buffer.from(hex, 'hex'));
 }
 export function requireScope(identity: Identity, scope: string) {
   if (!identity.scopes.includes(scope) && !identity.scopes.includes('memory:admin')) throw new AppError(403, 'insufficient_scope');
@@ -48,6 +58,7 @@ export function authentication(pool: Pool, resource: string, provider?: Provider
       next();
     } catch (error) {
       if (error instanceof AppError && error.status === 401) {
+        if (req.path === '/mcp') console.info(JSON.stringify({ event: 'mcp_authentication_failed', reason: error.code }));
         res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${new URL('/.well-known/oauth-protected-resource', resource)}"`);
       }
       next(error);

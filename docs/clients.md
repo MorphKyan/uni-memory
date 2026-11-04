@@ -63,6 +63,8 @@ bearer_token_env_var = "UNI_MEMORY_TOKEN"
 
 ## ChatGPT
 
+已实现可打包的自动记忆插件模板和 OAuth 连接打包器，覆盖桌面/网页接入目标；安装和账号自动调用尚未验收。操作与边界见 [ChatGPT 插件](chatgpt-plugin.md)。插件依靠模型执行技能，不能保证每轮调用或后台捕获所有聊天。
+
 1. 确认当前账号能够添加自定义 MCP，且能够使用读写工具；实际权限以账号界面为准。
 2. 设置 PUBLIC_URL 为公开 HTTPS 域名，配置 NPM。使用 ChatGPT 当前界面提供的准确 OAuth 回调 URL。
 3. 在 `.env` 的 `OAUTH_CLIENTS_JSON` 中预注册客户端。示例：`[{"client_id":"chatgpt-personal","redirect_uris":["OAUTH_REDIRECT_URI"],"token_endpoint_auth_method":"none"}]`。回调地址必须与实际界面完全一致；如果界面要求 confidential client，生成至少 32 字符 client_secret 并改用 client_secret_post 或 client_secret_basic。

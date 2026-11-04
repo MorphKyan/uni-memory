@@ -1,6 +1,6 @@
 # uni-memory：统一记忆系统
 
-最后更新：2026-10-28（Asia/Shanghai）。
+最后更新：2026-11-02（Asia/Shanghai）。
 
 ## 项目概况
 
@@ -21,18 +21,19 @@
 | 项目 | 当前配置 |
 | --- | --- |
 | 工具链 | TypeScript、Node.js 24 LTS、npm、Node 内置测试；依赖版本锁定于 `package-lock.json` |
+| 管理台 | Vue 3、TypeScript、Vite、普通 CSS；与 Express 同容器部署，浅／深色和响应式布局；ADMIN_PASSWORD 环境变量、HttpOnly Cookie 与 CSRF，HTTPS 配置下 LAN 根页面跳转 PUBLIC_URL |
 | 数据库访问 | node-postgres、直接 SQL、版本化 SQL 迁移 |
 | PostgreSQL | 独立 PostgreSQL 18.6，保存事实、历史、来源、幂等记录、Outbox、客户端令牌及 OAuth 状态；内部访问 |
 | Qdrant | 独立 Qdrant 1.19.2，可重建向量索引；保存向量、ID、版本及过滤元数据，正文和来源由 PostgreSQL 保存；内部访问 |
 | 应用结构 | 单个应用容器，内置 SQL Outbox 消费者与单个推理 Worker Thread；共三个常驻容器 |
 | Embedding | Transformers.js + ONNX Runtime，本地 CPU；EmbeddingGemma 2 文本版 Q4 / 768 维，配置为 `gemma2` / `q4` |
 | 编排 | Docker Compose，由已有 Compose Manager 界面管理，已配置自动启动 |
-| 公网基础 | IPv6 公网、IPv4 经 EO 代理、复用已有 NPM；项目链路待配置与实测 |
 | 版本管理 | Git 仓库，基线为清理前源码；已配置 GitHub origin（MorphKyan/uni-memory），凭据、配置、缓存和备份排除 Git |
 
 ## 记忆与接口规则
 
-- 使用层级 `namespace`、稳定 `key` 和多标签组织记忆。`namespace/key` 组合唯一，保留 UUID；常用范围为 `global` 与 `projects/<项目名>`。分区用于组织和过滤，权限由认证层处理。
+- 当前 Git 项目默认使用 projects/<host>/<仓库路径>。优先读取 origin 的 fetch URL，无 origin 时仅使用唯一远端。HTTPS、SSH 和 SCP 格式均提取主机与完整仓库路径，忽略认证信息、端口、查询参数和片段，去掉首尾斜杠和末尾 .git，统一小写，主机名中的点换成下划线。例如 projects/github_com/morphkyan/uni-memory。远端缺失、歧义或结果不符合 namespace 格式时，使用用户明确指定的分区，归属不明时先询问。已知旧项目分区时一并检索并复用原条目，新项目事实写入远端分区。
+- 项目讨论优先查 global 与当前项目分区。memory_core、memory_search 必须指定 namespaces；需要子分区时显式 include_descendants=true。
 - `type` 为 `preference/fact/decision/status`；`verification` 为 `confirmed/pending`，表示事实的核实状态。
 - 每个有长期记忆的分区维护一条 `key=overview` 的总览，概括用途、核心现状、重要 key 和子分区入口。客户端首次保存事实后创建，关键变化后按版本更新；使用 `type=status`、`expires_at=null`，服务自动置顶，`memory_core` 优先返回。详细事实保存在原条目，用户主动删除总览后的重建遵循其意愿。
 - 0.2.0 接口要求写入显式指定 `namespace/type/verification`，查询显式指定 `namespaces`，按 key 选择时携带 namespace。客户端接入时重新发现工具 schema。
@@ -50,7 +51,7 @@
 | 客户端 | 当前状态与后续工作 |
 | --- | --- |
 | Codex | Windows 全局规则和技能已安装；CLI 0.164.0-alpha.11.1 已验证跨会话自动写入与检索；桌面重启后已直接调用 `memory_core`、`memory_search`，语义检索正常 |
-| ChatGPT | 服务端 OAuth/PKCE 协议测试通过；待验证实际账号权限、回调、认证、读写与调用触发 |
+| ChatGPT | 已修复 2026 协议发现 HTTP400；公网 OAuth 对照发现、九工具及状态调用成功，平台仍报 -32603，完整技能安装和聊天自动触发待验收 |
 | OpenClaw | 待核实安装版本、MCP/插件能力、消息钩子与调用触发，并完成接入实测 |
 | CodeBuddy | 待核实 IDE/CLI/插件形态、版本及配置，完成认证、传输和调用实测 |
 

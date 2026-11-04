@@ -1,6 +1,6 @@
 {
   "name": "uni-memory",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,7 +8,9 @@
   },
   "scripts": {
     "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run build:web",
+    "build:web": "node scripts/check-web.cjs -p web/tsconfig.json && vite build web --config web/vite.config.ts",
+    "dev:web": "vite web --config web/vite.config.ts",
     "test": "npm run build && node --test dist/test/*.test.js",
     "start": "node dist/src/main.js",
     "migrate": "node dist/src/migrate.js",
@@ -16,7 +18,8 @@
     "cli": "node dist/src/cli.js",
     "benchmark": "npm run build && node scripts/benchmark.mjs",
     "test:integration": "node --test --test-concurrency=1 dist/test/*.integration.js",
-    "memory:install": "node scripts/install-memory-policy.mjs"
+    "memory:install": "node scripts/install-memory-policy.mjs",
+    "plugin:build": "node scripts/build-chatgpt-plugin.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.1",
@@ -34,6 +37,11 @@
     "@types/node": "24.19.2",
     "@types/oidc-provider": "9.12.1",
     "@types/pg": "8.23.1",
-    "typescript": "7.0.2"
+    "@vitejs/plugin-vue": "6.0.10",
+    "typescript": "7.0.2",
+    "typescript-vue": "npm:typescript@6.0.3",
+    "vite": "8.3.5",
+    "vue-tsc": "3.3.14",
+    "vue": "3.5.44"
   }
 }

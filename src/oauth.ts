@@ -83,11 +83,24 @@ export async function createOAuth(pool: Pool, cfg: Config) {
 }
 const escapeHtml = (input: unknown) => String(input).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 export function mountOAuth(app: Express, provider: Provider, cfg: Config) {
+  app.use(['/oauth', '/interaction'], (req, _res, next) => {
+    if (cfg.publicUrl.startsWith('https:') && !req.secure) throw new AppError(403, 'https_required');
+    next();
+  });
+  async function interactionDetails(req: express.Request, res: express.Response) {
+    try { return await provider.interactionDetails(req, res); }
+    catch (error) {
+      if (error instanceof errors.SessionNotFound) throw new AppError(400, 'interaction_expired');
+      throw error;
+    }
+  }
   app.get('/interaction/:uid', async (req, res) => {
-    const details = await provider.interactionDetails(req, res);
+    const details = await interactionDetails(req, res);
     const csrf = randomBytes(32).toString('hex');
     res.cookie('um_csrf', csrf, { httpOnly: true, secure: cfg.publicUrl.startsWith('https:'), sameSite: 'strict', path: `/interaction/${details.uid}`, maxAge: 600000 });
     res.setHeader('Cache-Control', 'no-store');
+    // no-referrer 会使浏览器表单 POST 的 Origin 变为 null，导致来源校验拒绝登录。
+    res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('Content-Security-Policy', "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     res.send(`<!doctype html><html lang="zh"><meta charset="utf-8"><title>uni-memory 授权</title><h1>uni-memory</h1>
       <p>客户端：${escapeHtml(details.params.client_id)}</p><p>权限：${escapeHtml(details.params.scope)}</p>
@@ -100,9 +113,9 @@ export function mountOAuth(app: Express, provider: Provider, cfg: Config) {
     const cookie = /(?:^|;\s*)um_csrf=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie ?? '')?.[1];
     const submitted = typeof req.body.csrf === 'string' && /^[a-f0-9]{64}$/.test(req.body.csrf) ? req.body.csrf : '';
     if (!cookie || !submitted || !timingSafeEqual(Buffer.from(cookie), Buffer.from(submitted))) throw new AppError(403, 'invalid_csrf');
-    const details = await provider.interactionDetails(req, res);
+    const details = await interactionDetails(req, res);
     if (details.prompt.name === 'login') {
-      if (typeof req.body.password !== 'string' || !passwordMatches(req.body.password, cfg.ownerHash!)) throw new AppError(401, 'invalid_login');
+      if (typeof req.body.password !== 'string' || !await passwordMatches(req.body.password, cfg.ownerHash!)) throw new AppError(401, 'invalid_login');
       await provider.interactionFinished(req, res, { login: { accountId: 'owner' } }, { mergeWithLastSubmission: false });
     } else if (details.prompt.name === 'consent' && details.session?.accountId === 'owner') {
       const grant = details.grantId ? await provider.Grant.find(details.grantId) : new provider.Grant({ accountId: 'owner', clientId: String(details.params.client_id) });
@@ -120,5 +133,11 @@ export function mountOAuth(app: Express, provider: Provider, cfg: Config) {
     } else throw new AppError(400, 'unsupported_interaction');
   });
   app.use('/oauth', provider.callback());
+  // RFC 8414 将 well-known 放在带路径 issuer 的路径之前。
+  app.get('/.well-known/oauth-authorization-server/oauth', (req, res) => {
+    req.url = '/.well-known/oauth-authorization-server';
+    req.originalUrl = `/oauth${req.url}`;
+    return provider.callback()(req, res);
+  });
   app.get('/.well-known/oauth-authorization-server', (_req, res) => res.redirect(302, '/oauth/.well-known/oauth-authorization-server'));
 }

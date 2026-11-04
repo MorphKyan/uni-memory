@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "uni-memory",
+  "version": "0.1.0",
+  "description": "在 ChatGPT 聊天中按需检索共享记忆，并自动提取稳定事实、偏好和项目决策。",
+  "author": { "name": "MorphKyan" },
+  "repository": "https://github.com/MorphKyan/uni-memory",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "共享记忆",
+        "shortDescription": "跨聊天检索与保存长期事实和偏好",
+        "longDescription": "连接个人 uni-memory 服务，按 Shared Memory Policy v1 维护长期记忆。仅保存有长期价值的事实，不保存完整对话或凭据。自动调用由 ChatGPT 执行，受账号权限和工具确认设置约束。",
+        "developerName": "MorphKyan",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"]
+      }
+    }
+  }
+}
