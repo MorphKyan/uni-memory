@@ -1,5 +1,7 @@
 # 四客户端接入
 
+0.3.1 将核心背景读取工具重命名为 `memory_context`，返回分区总览及其他置顶有效记忆，行为不变。服务升级后客户端须重新发现工具 schema，并更新规则、Skill 及重新生成的 Plugin 包。REST 路径仍为 `/v1/memories/core`；旧 MCP 工具名不保留别名。
+
 ## 通用配置
 
 服务地址为 `MCP_ORIGIN/mcp`，使用实际域名替换。通过管理 CLI 为 Codex、CodeBuddy、OpenClaw 分别创建令牌：
@@ -59,7 +61,7 @@ bearer_token_env_var = "UNI_MEMORY_TOKEN"
 }
 ```
 
-是否能在每轮后自动提交，需要另行核实当前版本的插件/消息钩子。首版提供工具及使用指令，不承诺已经安装自动捕获钩子。[OpenClaw MCP](https://docs.openclaw.ai/mcp)、[MCPorter 配置](https://github.com/openclaw/mcporter/blob/main/docs/config.md)
+OpenClaw 的插件/消息钩子仍须另行核实；目前按 MCP＋Skill 接入，不自动安装不明格式的 Hook。[OpenClaw MCP](https://docs.openclaw.ai/mcp)、[MCPorter 配置](https://github.com/openclaw/mcporter/blob/main/docs/config.md)
 
 ## ChatGPT
 
@@ -89,6 +91,8 @@ node scripts/install-memory-policy.mjs --codex-home /path/to/.codex
 ```
 
 默认目标为 CODEX_HOME，未设置时使用用户目录下 `.codex`。安装器仅替换 AGENTS.md 内本项目的 uni-memory 标记块，保留其他指令，并在内容变化时备份原文件；技能安装到 `skills/shared-memory/SKILL.md`。重复执行不会重复添加规则；同名非本项目技能会拒绝覆盖。
+
+0.3.1 的安装器还支持按环境选择启动 Hook，步骤及限制见 [Hook 安装](hooks.md)。连接已部署的 HTTP MCP 和手动放置 Skill 不需要本机 Node/npm；运行安装器和 JavaScript Hook 需要 Node，无需 npm 或新增依赖。`auto` 默认通过本机 `codex exec --help` 确认 Hook 能力，无法确认时仅安装规则与 Skill。安装 Agent 应先确认正在使用的客户端；不能因为机器上有 Codex 就给另一个客户端安装 Codex 配置。CodeBuddy 使用 `--client codebuddy`，通用客户端使用 `--client generic --home PATH`。
 
 所有接入客户端均须遵循同一份 [共享策略](shared-memory-policy.md)，仅保存有明确依据和长期价值的内容，临时故障和排查猜测留在当前会话。核实字段已移除，升级服务时同时更新客户端规则、Skill 和 Plugin 包，并刷新 MCP 工具 schema。已分发的插件包需重新生成和安装。
 

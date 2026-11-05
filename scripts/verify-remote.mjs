@@ -34,14 +34,14 @@ try {
   assert.equal((await call('memory_get', { id: memory.id })).key, key);
   assert.equal((await call('memory_get', { namespace: input.namespace, key })).id, memory.id);
   assert((await client.callTool({ name: 'memory_search', arguments: { query: '测试' } })).isError);
-  assert.equal((await call('memory_core', { namespaces: [parent] })).length, 0);
-  assert.deepEqual((await call('memory_core', { namespaces: [parent], include_descendants: true })).map(m => m.id), [memory.id]);
+  assert.equal((await call('memory_context', { namespaces: [parent] })).length, 0);
+  assert.deepEqual((await call('memory_context', { namespaces: [parent], include_descendants: true })).map(m => m.id), [memory.id]);
   assert.deepEqual((await call('memory_namespaces', { parent })).namespaces, [{ namespace: input.namespace, count: 1 }]);
   const overview = await call('memory_write', { ...input, key: 'overview', type: 'status', pinned: false,
     content: '部署验收合成分区总览。', idempotency_key: randomUUID() });
   memories.set(overview.memory.id, overview.memory);
   assert.equal(overview.memory.pinned, true);
-  assert.equal((await call('memory_core', { namespaces: [parent], include_descendants: true }))[0].id, overview.memory.id);
+  assert.equal((await call('memory_context', { namespaces: [parent], include_descendants: true }))[0].id, overview.memory.id);
   const page = await call('memory_list', { namespaces: [parent], include_descendants: true, limit: 1 });
   assert.deepEqual(page.memories.map(item => item.id), [memory.id]);
   assert(page.next_cursor);

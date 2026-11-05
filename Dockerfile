@@ -16,6 +16,8 @@ COPY benchmark ./benchmark
 COPY scripts ./scripts
 COPY docs/shared-memory-policy.md ./docs/shared-memory-policy.md
 COPY skills/shared-memory ./skills/shared-memory
+COPY hooks ./hooks
+COPY plugins ./plugins
 CMD ["npm", "run", "test:integration"]
 
 FROM build AS production-deps

@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|clear|compact)$",
+        "hooks": [{
+          "type": "command",
+          "command": "node -e \"require(require('path').join(process.env.PLUGIN_ROOT || process.env.CODEBUDDY_PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT, 'hooks/uni-memory-context.cjs'))\"",
+          "timeout": 3
+        }]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [{
+          "type": "command",
+          "command": "node -e \"require(require('path').join(process.env.PLUGIN_ROOT || process.env.CODEBUDDY_PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT, 'hooks/uni-memory-context.cjs'))\"",
+          "timeout": 3
+        }]
+      }
+    ]
+  }
+}

@@ -11,15 +11,15 @@ description: 使用 uni_memory MCP 检索和维护跨客户端长期记忆；适
 
 - 当前上下文缺少个人或项目事实时查询共享库；上下文充分时避免无关检索。共享库是长期记忆权威来源。
 - 当前 Git 项目默认使用 projects/<host>/<仓库路径>。优先读取 origin 的 fetch URL，无 origin 时仅使用唯一远端。HTTPS、SSH 和 SCP 格式均提取主机与完整仓库路径，忽略认证信息、端口、查询参数和片段，去掉首尾斜杠和末尾 .git，统一小写，主机名中的点换成下划线。例如 projects/github_com/morphkyan/uni-memory。远端缺失、歧义或结果不符合 namespace 格式时，使用用户明确指定的分区，归属不明时先询问。项目记忆只在确定的规范分区中检索和写入，不再回退或复用旧项目分区。发现旧分区或 global 中的项目事实时，先核实归属并迁移，保留来源和历史、合并总览并刷新索引；归属不明时先询问，迁移完成后仅使用目标分区。
-- 项目讨论优先查 global 与当前项目分区。memory_core、memory_search 必须指定 namespaces；需要子分区时显式 include_descendants=true。
-- `memory_core` 和 `memory_search` 必须指定 `namespaces`。默认精确匹配，需要子分区时显式传 `include_descendants: true`；`projects/home` 不包含 `projects/homelab`。
+- 项目讨论优先查 global 与当前项目分区。memory_context、memory_search 必须指定 namespaces；需要子分区时显式 include_descendants=true。
+- `memory_context` 和 `memory_search` 必须指定 `namespaces`。默认精确匹配，需要子分区时显式传 `include_descendants: true`；`projects/home` 不包含 `projects/homelab`。
 - 按问题选择多组关键词和语义查询，必要时换同义词、中英文或设备名。根据结果是否补足事实决定是否继续，不机械重复查询。
 - 多个分区取并集；`tags` 过滤要求全部包含。可选 `type` 过滤。
 
 ## 分区总览
 
-- 每个有长期记忆的分区维护一条 `key: overview` 的总览。首次使用分区先通过 `memory_core` 或 `memory_get({namespace,key:"overview"})` 读取，缺失时依据已有事实创建；首次保存分区事实后建立总览。
-- 总览使用 `type: status`、`pinned: true`、`expires_at: null`，正文简述用途与范围、核心现状、重要记忆 key 和子分区入口。服务自动置顶，`memory_core` 优先返回；详细事实仍保存在各自条目。
+- 每个有长期记忆的分区维护一条 `key: overview` 的总览。首次使用分区先通过 `memory_context` 或 `memory_get({namespace,key:"overview"})` 读取，缺失时依据已有事实创建；首次保存分区事实后建立总览。
+- 总览使用 `type: status`、`pinned: true`、`expires_at: null`，正文简述用途与范围、核心现状、重要记忆 key 和子分区入口。服务自动置顶，`memory_context` 优先返回；详细事实仍保存在各自条目。
 - 关键事实、状态或目录变化后，先读取总览当前版本再更新。仅概括已知事实，有持续价值的未决事项在正文注明依据和分歧；来源引用依据，总览作为导航摘要，具体事实以原条目为准。
 - 删除事实后同步移除总览中的对应摘要与入口。用户要求删除总览时遵循该要求，后续仅在用户允许时重建。写入继续使用完整属性、版本检查和唯一幂等键。
 

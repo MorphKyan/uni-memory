@@ -34,6 +34,9 @@ test('ChatGPT 插件打包校验连接地址、拒绝覆盖并包含完整记忆
     assert.equal(await readFile(join(output, 'skills/auto-memory/references/policy.md'), 'utf8'),
       await readFile(fileURLToPath(new URL('../../docs/shared-memory-policy.md', import.meta.url)), 'utf8'));
     await access(join(output, 'skills/auto-memory/SKILL.md'));
+    const policy = await readFile(join(output, 'skills/auto-memory/references/policy.md'), 'utf8');
+    assert(policy.includes('memory_context'));
+    assert(!policy.includes(['memory', 'core'].join('_')));
     assert.throws(() => run());
     assert.equal(await readFile(join(output, 'plugin.json'), 'utf8'), JSON.stringify(manifest, null, 2) + '\n');
   } finally { await rm(directory, { recursive: true, force: true }); }

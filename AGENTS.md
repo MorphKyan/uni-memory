@@ -35,9 +35,9 @@
 ## 记忆与接口规则
 
 - 当前 Git 项目默认使用 projects/<host>/<仓库路径>。优先读取 origin 的 fetch URL，无 origin 时仅使用唯一远端。HTTPS、SSH 和 SCP 格式均提取主机与完整仓库路径，忽略认证信息、端口、查询参数和片段，去掉首尾斜杠和末尾 .git，统一小写，主机名中的点换成下划线。例如 projects/github_com/morphkyan/uni-memory。远端缺失、歧义或结果不符合 namespace 格式时，使用用户明确指定的分区，归属不明时先询问。项目记忆只在确定的规范分区中检索和写入，不再回退或复用旧项目分区。发现旧分区或 global 中的项目事实时，先核实归属并迁移，保留来源和历史、合并总览并刷新索引；归属不明时先询问，迁移完成后仅使用目标分区。
-- 项目讨论优先查 global 与当前项目分区。memory_core、memory_search 必须指定 namespaces；需要子分区时显式 include_descendants=true。
+- 项目讨论优先查 global 与当前项目分区。memory_context、memory_search 必须指定 namespaces；需要子分区时显式 include_descendants=true。
 - `type` 为 `preference/fact/decision/status`。
-- 每个有长期记忆的分区维护一条 `key=overview` 的总览，概括用途、核心现状、重要 key 和子分区入口。客户端首次保存事实后创建，关键变化后按版本更新；使用 `type=status`、`expires_at=null`，服务自动置顶，`memory_core` 优先返回。详细事实保存在原条目，用户主动删除总览后的重建遵循其意愿。
+- 每个有长期记忆的分区维护一条 `key=overview` 的总览，概括用途、核心现状、重要 key 和子分区入口。客户端首次保存事实后创建，关键变化后按版本更新；使用 `type=status`、`expires_at=null`，服务自动置顶，`memory_context` 优先返回。详细事实保存在原条目，用户主动删除总览后的重建遵循其意愿。
 - 0.2.0 接口要求写入显式指定 `namespace/type`，查询显式指定 `namespaces`，按 key 选择时携带 namespace。客户端接入时重新发现工具 schema。
 - 写入采用幂等处理；相同 namespace/key、内容及属性合并来源。更新检查版本并保留历史；不确定冲突保留双方陈述、归属与来源，核实后解决。
 - 删除清除当前正文、历史和来源，立即影响权威查询，并异步传播到全部索引集合。遵循用户的保存和删除要求。
@@ -52,7 +52,7 @@
 
 | 客户端 | 当前状态与后续工作 |
 | --- | --- |
-| Codex | Windows 全局规则和技能已安装；CLI 0.164.0-alpha.11.1 已验证跨会话自动写入与检索；桌面重启后已直接调用 `memory_core`、`memory_search`，语义检索正常 |
+| Codex | Windows 全局规则和技能已安装；CLI 0.164.0-alpha.11.1 已验证跨会话自动写入与检索；桌面重启后已直接调用 `memory_context`、`memory_search`，语义检索正常 |
 | ChatGPT | 已修复 2026 协议发现 HTTP400；公网 OAuth 对照发现、九工具及状态调用成功，平台仍报 -32603，完整技能安装和聊天自动触发待验收 |
 | OpenClaw | 待核实安装版本、MCP/插件能力、消息钩子与调用触发，并完成接入实测 |
 | CodeBuddy | 待核实 IDE/CLI/插件形态、版本及配置，完成认证、传输和调用实测 |

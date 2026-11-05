@@ -486,12 +486,14 @@ test('SDK 客户端完成 MCP 握手、九个工具发现、读写及工具权�
     try {
       await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
       const list = await client.listTools(); assert.equal(list.tools.length, 9);
+      assert(list.tools.some(t => t.name === 'memory_context'));
+      assert(!list.tools.some(t => t.name === ['memory', 'core'].join('_')));
       assert(client.getInstructions()?.includes('Shared Memory Policy v1'));
       const writeTool = list.tools.find(t => t.name === 'memory_write')!;
       for (const field of ['namespace', 'type']) assert(writeTool.inputSchema.required?.includes(field));
       const result = await client.callTool({ name: 'memory_write', arguments: fact() });
       assert.equal(!!result.isError, token === reader);
-      const core = await client.callTool({ name: 'memory_core', arguments: { namespaces: ['global'] } }); assert(!core.isError);
+      const context = await client.callTool({ name: 'memory_context', arguments: { namespaces: ['global'] } }); assert(!context.isError);
       for (const [name, args] of [['memory_namespaces', {}], ['memory_list', { namespaces: ['global'], limit: 1 }]] as const) {
         assert.equal(list.tools.find(t => t.name === name)?.annotations?.readOnlyHint, true);
         const result = await client.callTool({ name, arguments: args });

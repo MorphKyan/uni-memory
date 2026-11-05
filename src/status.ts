@@ -23,7 +23,7 @@ export class MemoryStatus {
     return {
       status: !statistics ? 'unavailable' : hybrid && statistics.index.queued === 0
         && statistics.index.failed === 0 && statistics.index.indexed === statistics.index.total ? 'ok' : 'degraded',
-      checked_at: new Date().toISOString(), version: '0.3.0', uptime_seconds: Math.floor(process.uptime()),
+      checked_at: new Date().toISOString(), version: '0.3.1', uptime_seconds: Math.floor(process.uptime()),
       scope, database: statistics ? 'ok' : 'unavailable', qdrant: vectors.status === 'fulfilled' ? 'ok' : 'unavailable',
       memories: statistics?.memories ?? null, embedding,
       index: statistics ? { ...statistics.index, target_generation: generation, collection_exists: collectionExists } : null,

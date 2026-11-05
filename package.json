@@ -1,6 +1,6 @@
 {
   "name": "uni-memory",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -19,6 +19,7 @@
     "benchmark": "npm run build && node scripts/benchmark.mjs",
     "test:integration": "node --test --test-concurrency=1 dist/test/*.integration.js",
     "memory:install": "node scripts/install-memory-policy.mjs",
+    "plugin:build:agent": "node scripts/build-agent-plugin.mjs",
     "plugin:build": "node scripts/build-chatgpt-plugin.mjs"
   },
   "dependencies": {

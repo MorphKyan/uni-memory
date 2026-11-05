@@ -9,7 +9,7 @@
 | `POST /v1/memories` | memory:write | memory_write |
 | `GET /v1/memories/history?id=UUID` 或 `?namespace=NS&key=KEY` | memory:read | memory_history |
 | `POST /v1/memories/delete` | memory:write | memory_delete |
-| `GET /v1/memories/core?namespaces=global` | memory:read | memory_core |
+| `GET /v1/memories/core?namespaces=global` | memory:read | memory_context |
 | `GET /v1/namespaces` 或 `?parent=projects` | memory:read | memory_namespaces |
 | `POST /v1/memories/list` | memory:read | memory_list |
 | `GET /v1/status?namespaces=global` | memory:read | memory_status |
@@ -53,7 +53,7 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 
 写入 overview 时服务自动设置 `pinned=true`，有效期要求 `expires_at=null`；建议 `type=status`。正文包含用途与范围、核心现状、重要记忆 key 和子分区入口，最多 4000 字符。总览作为导航摘要，详细事实以对应原条目为准。
 
-通过 `memory_get({namespace:"projects/homelab",key:"overview"})` 精确读取。`memory_core` 在原有过滤范围内优先返回 overview，再按更新时间返回其他置顶事实，总上限仍为 50。来源与版本历史可通过 get/history 查看。首次接入已有分区时，由客户端读取相关事实后补建总览；用户主动删除的总览仅在允许后重建。
+通过 `memory_get({namespace:"projects/homelab",key:"overview"})` 精确读取。`memory_context` 在原有过滤范围内优先返回 overview，再按更新时间返回其他置顶事实，总上限仍为 50。来源与版本历史可通过 get/history 查看。首次接入已有分区时，由客户端读取相关事实后补建总览；用户主动删除的总览仅在允许后重建。
 
 ## 分区发现与完整列表
 
@@ -102,7 +102,7 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 
 所有检索在返回前从 PostgreSQL 核对当前版本、删除状态及有效期；过期事实不能通过 memory_get/search/core 返回，但可显式通过 history 查看。核心记忆是最多 50 条置顶且有效的事实，不是自动生成摘要。
 
-`memory_core` 接受同样的 namespaces/include_descendants/tags/type 条件，不接受 query/limit。REST GET 示例：`/v1/memories/core?namespaces=global&namespaces=projects%2Fhomelab&include_descendants=true`，重复 tags 参数表示多个标签。GET 布尔参数仅接受 true/false。memory_get/history 使用 `{id}` 或 `{namespace,key}`，不接受含糊的单 key。
+`memory_context` 接受同样的 namespaces/include_descendants/tags/type 条件，不接受 query/limit。REST GET 示例：`/v1/memories/core?namespaces=global&namespaces=projects%2Fhomelab&include_descendants=true`，重复 tags 参数表示多个标签。GET 布尔参数仅接受 true/false。memory_get/history 使用 `{id}` 或 `{namespace,key}`，不接受含糊的单 key。
 
 所有分区共用 PostgreSQL 和同一模型的 Qdrant 集合；payload 保存版本、namespace、祖先路径、tags、type，不保存正文或来源。分区用于逻辑组织，不提供客户端权限隔离。
 
