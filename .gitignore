@@ -7,4 +7,3 @@ dist/
 .secrets/
 .cache/
 .backups/
-compose.npm.yaml

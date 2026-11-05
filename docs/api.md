@@ -61,7 +61,7 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 `memory_namespaces({})` 返回所有包含当前有效记忆的分区及直属条目数，例如：
 
 ```json
-{"namespaces":[{"namespace":"global","count":12},{"namespace":"projects/uni-memory","count":20}]}
+{"namespaces":[{"namespace":"global","count":12},{"namespace":"projects/github_com/morphkyan/uni-memory","count":20}]}
 ```
 
 可传 `{ "parent": "projects" }`，只返回该分区自身及按路径边界匹配的子分区；`projects/home` 不包含 `projects/homelab`。按完整分区名升序返回，count 不累计子分区，包含 overview。分区从 PostgreSQL 当前有效事实汇总，不保留空分区或仅有过期、删除事实的分区，也不虚构没有直属事实的父分区。需要总览时再调用 memory_get。REST 使用 `GET /v1/namespaces?parent=projects`。
@@ -70,7 +70,7 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 
 ```json
 {
-  "namespaces": ["projects/uni-memory"],
+  "namespaces": ["projects/github_com/morphkyan/uni-memory"],
   "include_descendants": true,
   "verification": "pending",
   "limit": 50
@@ -118,7 +118,7 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 `memory_status` 提供当前记忆数量和实例运行状态，不记录变化日志、不触发模型加载或推理。需要 `memory:read`，沿用 namespaces/include_descendants/tags/type/verification 过滤，namespaces 必填：
 
 ```json
-{"namespaces":["global","projects/uni-memory"],"include_descendants":false}
+{"namespaces":["global","projects/github_com/morphkyan/uni-memory"],"include_descendants":false}
 ```
 
 REST 使用 `GET /v1/status?namespaces=global&namespaces=projects%2Funi-memory&include_descendants=false`，参数转换与 core 相同，布尔值仅接受 true/false；重复 tags 参数表示多个标签。成功查询返回 HTTP 200，总体运行状况由响应的 status 表达，保留 `/healthz` 与 `/readyz` 原有语义。

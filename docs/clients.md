@@ -90,6 +90,6 @@ node scripts/install-memory-policy.mjs --codex-home /path/to/.codex
 
 默认目标为 CODEX_HOME，未设置时使用用户目录下 `.codex`。安装器仅替换 AGENTS.md 内本项目的 uni-memory 标记块，保留其他指令，并在内容变化时备份原文件；技能安装到 `skills/shared-memory/SKILL.md`。重复执行不会重复添加规则；同名非本项目技能会拒绝覆盖。
 
-重开 Codex 会话使新技能、规则和 MCP schema 一起加载。项目讨论传 `namespaces:["global","projects/uni-memory"]` 等明确范围；写入必须提供 namespace/type/verification。
+重开 Codex 会话使新技能、规则和 MCP schema 一起加载。项目讨论传 `namespaces:["global","projects/github_com/morphkyan/uni-memory"]` 等明确范围；写入必须提供 namespace/type/verification。
 
 其他客户端将 policy 文档放入各自支持的个人指令或项目规则；支持 SKILL.md 的客户端可以复制 shared-memory 技能目录。未验证其他客户端的技能加载位置与自动触发，不自动修改它们的配置。

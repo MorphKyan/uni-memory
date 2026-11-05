@@ -16,7 +16,7 @@ npm run plugin:build -- --mcp-url MCP_URL --client-id chatgpt-personal --output 
 
 输出目录的父目录需已存在，输出目录必须不存在。打包器拒绝 HTTP、URL 中凭据、查询参数与片段，并拒绝覆盖旧目录。配置只包含非敏感地址、客户端 ID 和权限；口令及 Token 不打包。
 
-将**输出目录内**的 `plugin.json`、`mcp.json` 和 `skills/` 压缩到 ZIP 根目录。在 [ChatGPT 插件页](https://chatgpt.com/plugins)通过添加菜单上传；实际导入/安装流程仍需账号验证。也可先添加自定义 MCP，配置 OAuth，查看工具发现与授权是否成功，再安装完整技能包。仅连接 MCP 不能证明技能已经安装。本机实际包为 `.cache/uni-memory-chatgpt-ready.zip`。Edge 上传工具当前提示须在扩展详情开启“允许访问文件 URL”；尚未修改该权限。用户已明确同意创建当前 ChatGPT 连接并授予 memory:read/memory:write，但尚未确认授权成功。
+将**输出目录内**的 `plugin.json`、`mcp.json` 和 `skills/` 压缩到 ZIP 根目录。在 [ChatGPT 插件页](https://chatgpt.com/plugins)通过添加菜单上传；实际导入/安装流程仍需账号验证。也可先添加自定义 MCP，配置 OAuth，查看工具发现与授权是否成功，再安装完整技能包。仅连接 MCP 不能证明技能已经安装。旧本机打包产物已于 2026-11-05 清理，安装时按上述命令重新生成以包含最新规则。此前 Edge 上传工具提示须在扩展详情开启“允许访问文件 URL”；尚未修改该权限。用户已明确同意创建当前 ChatGPT 连接并授予 memory:read/memory:write，但尚未确认授权成功。
 
 安装后分别在桌面和网页新聊天中启用插件，验证以下行为并记录实际工具调用及结果：
 

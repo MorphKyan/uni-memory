@@ -20,12 +20,6 @@ ONNX Runtime 包已带 CPU 运行库，环境变量跳过与本项目无关的�
 
 ## 连接已有 NPM
 
-复制 `compose.npm.example.yaml` 为 `compose.npm.yaml`，替换已有 NPM 的外部 Docker 网络名称。设置 PUBLIC_URL 为实际 HTTPS 根域名，在 NPM 中把该域名代理到同网络的 `uni-memory:3000`，申请 HTTPS 证书。使用专用网络别名，避免其他 Compose 项目的通用 app 别名冲突。
-
-```sh
-docker compose -f compose.yaml -f compose.npm.yaml up -d --build
-```
-
 TRUST_PROXY 只填写 NPM 所在的实际可信网段或 IP，不能使用 true/任意公网。ALLOWED_ORIGINS 可填写逗号分隔的额外可信源，默认仅允许 PUBLIC_URL。保留 Host 和 Authorization，转发正确的 X-Forwarded-Proto。关闭 `/mcp` 的代理缓存，允许 JSON POST 和 OAuth 重定向；EO IPv4 与直接 IPv6 都需要实测。默认不开放单独 SSE 长连接，可减少代理长连接差异，但不能据此宣称 EO 链路已经通过。
 
 ## 模型与对比

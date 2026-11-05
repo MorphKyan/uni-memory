@@ -1,6 +1,6 @@
 # uni-memory：统一记忆系统
 
-最后更新：2026-11-02（Asia/Shanghai）。
+最后更新：2026-11-05（Asia/Shanghai）。
 
 ## 项目概况
 
@@ -32,7 +32,7 @@
 
 ## 记忆与接口规则
 
-- 当前 Git 项目默认使用 projects/<host>/<仓库路径>。优先读取 origin 的 fetch URL，无 origin 时仅使用唯一远端。HTTPS、SSH 和 SCP 格式均提取主机与完整仓库路径，忽略认证信息、端口、查询参数和片段，去掉首尾斜杠和末尾 .git，统一小写，主机名中的点换成下划线。例如 projects/github_com/morphkyan/uni-memory。远端缺失、歧义或结果不符合 namespace 格式时，使用用户明确指定的分区，归属不明时先询问。已知旧项目分区时一并检索并复用原条目，新项目事实写入远端分区。
+- 当前 Git 项目默认使用 projects/<host>/<仓库路径>。优先读取 origin 的 fetch URL，无 origin 时仅使用唯一远端。HTTPS、SSH 和 SCP 格式均提取主机与完整仓库路径，忽略认证信息、端口、查询参数和片段，去掉首尾斜杠和末尾 .git，统一小写，主机名中的点换成下划线。例如 projects/github_com/morphkyan/uni-memory。远端缺失、歧义或结果不符合 namespace 格式时，使用用户明确指定的分区，归属不明时先询问。项目记忆只在确定的规范分区中检索和写入，不再回退或复用旧项目分区。发现旧分区或 global 中的项目事实时，先核实归属并迁移，保留来源和历史、合并总览并刷新索引；归属不明时先询问，迁移完成后仅使用目标分区。
 - 项目讨论优先查 global 与当前项目分区。memory_core、memory_search 必须指定 namespaces；需要子分区时显式 include_descendants=true。
 - `type` 为 `preference/fact/decision/status`；`verification` 为 `confirmed/pending`，表示事实的核实状态。
 - 每个有长期记忆的分区维护一条 `key=overview` 的总览，概括用途、核心现状、重要 key 和子分区入口。客户端首次保存事实后创建，关键变化后按版本更新；使用 `type=status`、`expires_at=null`，服务自动置顶，`memory_core` 优先返回。详细事实保存在原条目，用户主动删除总览后的重建遵循其意愿。
