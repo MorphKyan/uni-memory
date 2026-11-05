@@ -2,7 +2,7 @@ import { createPool } from './db.js';
 import { migrate, readMigrations } from './migrations.js';
 
 try {
-  const files = await readMigrations(new URL('../../migrations/', import.meta.url));
+  const files = await readMigrations();
   const pool = createPool(process.env.DATABASE_URL);
   try {
     const applied = await migrate(pool, files);

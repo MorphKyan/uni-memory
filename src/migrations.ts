@@ -9,7 +9,7 @@ interface Migration {
   checksum: string;
 }
 
-export async function readMigrations(directory: URL): Promise<Migration[]> {
+export async function readMigrations(directory = new URL('../../src/schema/', import.meta.url)): Promise<Migration[]> {
   const files = (await readdir(directory)).filter(name => name.endsWith('.sql')).sort();
   const versions = new Set<string>();
   return Promise.all(files.map(async name => {

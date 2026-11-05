@@ -13,7 +13,7 @@ const cfg = config();
 const pool = createPool(process.env.DATABASE_URL);
 let embedder: EmbeddingWorker | undefined;
 try {
-  await migrate(pool, await readMigrations(new URL('../../migrations/', import.meta.url)));
+  await migrate(pool, await readMigrations());
   const store = new Store(pool);
   const qdrant = new Qdrant(cfg);
   embedder = cfg.model ? new EmbeddingWorker(cfg.model as ModelName, process.env.EMBEDDING_DTYPE || undefined, cfg.modelCache) : undefined;

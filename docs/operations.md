@@ -21,7 +21,3 @@ docker compose exec -T app node dist/src/cli.js organize --allow-external MEMORY
 ```
 
 命令只向配置的 Chat Completions 接口发送选定事实的 ID、版本、键和正文，最多 20 条、16000 字符。返回结果是建议，采纳时通过记忆写入接口更新。
-
-## 备份与恢复
-
-`scripts/backup.sh` 备份 PostgreSQL 和私密配置，保留 14 天。`scripts/restore.sh --replace-current` 从指定备份恢复，覆盖当前数据及配置。Qdrant 索引由 PostgreSQL 数据重建。

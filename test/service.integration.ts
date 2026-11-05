@@ -36,7 +36,7 @@ async function request(path: string, token = reader, body?: unknown, headers: Re
   return fetch(`${base}${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
 }
 before(async () => {
-  await migrate(pool, await readMigrations(new URL('../../migrations/', import.meta.url)));
+  await migrate(pool, await readMigrations());
   await pool.query('TRUNCATE memories,memory_sources,memory_events,idempotency,index_jobs,index_entries,index_generations,client_tokens,oauth_state RESTART IDENTITY');
   server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); assert(address && typeof address !== 'string');
@@ -97,7 +97,7 @@ test('管理台密码会话在真实数据库完成读写、版本冲突、来�
 });
 
 test('真实数据库迁移可重复执行，健康检查区分依赖', async () => {
-  assert.deepEqual(await migrate(pool, await readMigrations(new URL('../../migrations/', import.meta.url))), []);
+  assert.deepEqual(await migrate(pool, await readMigrations()), []);
   const health = await fetch(`${base}/healthz`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), { status: 'ok' });
@@ -268,7 +268,7 @@ test('原表升级保留正文、来源、版本和历史，旧索引重新登�
   const url = new URL(connection!); url.searchParams.set('options', `-c search_path=${schema},public`);
   const isolated = createPool(url.toString());
   try {
-    const files = await readMigrations(new URL('../../migrations/', import.meta.url));
+    const files = await readMigrations();
     await migrate(isolated, files.slice(0, 1));
     const id = randomUUID();
     await isolated.query('INSERT INTO memories(id,key,content,version) VALUES($1,$2,$3,3)', [id, 'legacy.example', '合成旧事实']);
