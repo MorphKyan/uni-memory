@@ -12,6 +12,10 @@
 docker compose up -d --build --no-deps app
 ```
 
+通过 `PUBLIC_URL` 对应的根路径访问管理台。配置 HTTPS 时，会话 Cookie 带 Secure 属性。
+
+`ADMIN_PASSWORD` 未设置或为空时，登录关闭，页面显示配置说明；原有 MCP 和 Bearer Token REST 继续可用。密码不符合长度要求时启动失败。修改变量后必须重新创建 app 容器（仅 restart 不会加载 Compose 新环境变量），所有旧会话随进程退出而失效。
+
 ## 登录与权限
 
 - 密码仅在服务端用于 scrypt 校验，不下发给前端、不写入业务数据库。
@@ -31,15 +35,3 @@ docker compose up -d --build --no-deps app
 分区总览作为 `key=overview` 的普通记忆维护；界面提示长期有效与自动置顶。管理台不会自动生成或重建总览，新增重要事实或删除条目后，用户应核对相关总览摘要。
 
 服务状态页展示当前有效、置顶及过期数量，以及 PostgreSQL、Qdrant、Embedding、索引覆盖、积压与失败任务；不调用外部整理 API，不触发模型推理。
-
-## 开发与验证
-
-```sh
-npm ci
-npm run build
-npm test
-```
-
-`npm run build` 同时构建服务端并进行 Vue 类型检查和前端生产构建，产物位于 `dist/src` 与 `dist/web`。`npm start` 可直接服务完整页面。
-
-需要前端热更新时，先启动本地后端（默认 3000），再运行 `npm run dev:web`。Vite 将 `/ui`、`/v1` 代理至本地后端，后端 `ALLOWED_ORIGINS` 需显式加入 Vite 的访问来源（默认 `VITE_ORIGIN`）。生产环境使用构建产物。

@@ -1,65 +1,24 @@
-# uni-memory：统一记忆系统
+# uni-memory
 
-最后更新：2026-11-05（Asia/Shanghai）。
-
-## 项目概况
-
-为 ChatGPT、OpenClaw、Codex、CodeBuddy 提供个人共享长期记忆。外部共享库是长期记忆的唯一权威来源；客户端负责识别、提交和检索事实，服务端负责校验、存储、索引与版本追踪。
+uni-memory 为多个客户端提供共享长期记忆。应用通过 REST 和 Streamable HTTP MCP 提供同一套记忆操作，并提供 Vue 管理台。Docker Compose 运行应用、PostgreSQL 和 Qdrant。
 
 ## 协作规则
 
-- 修改项目时必须检查并同步所有受影响的 Skill、Plugin 和客户端接入方式，包括 REST、MCP、管理台、CLI、安装器、打包模板、客户端规则与文档，保证接口字段、行为和记忆策略一致。验收应覆盖实际生成或安装的产物。
+- 默认使用中文。优先复用标准库、已有依赖和组件，优先在 WSL 中开发、构建和测试。
+- 修改接口或记忆策略时，同步检查 REST、MCP、管理台、CLI、Skill、Plugin、安装器、模板和文档，并验证实际生成或安装的产物。
+- 改动技术方向、模型、外部 API 供应商、隐私与出站内容、记忆更新或删除规则、公网认证前，先确认。
+- 文档描述项目功能、配置和使用方式。部署地址、凭据、实例目录和运行记录保存在私密配置或共享记忆中。
+- 记忆操作遵循 [共享记忆策略](docs/shared-memory-policy.md)。执行已授权的服务操作时，按 [服务连接策略](docs/service-access-policy.md) 使用私密凭据。
 
-- 默认使用中文沟通和编写项目文档。
-- 按个人小项目维护，保持结构简单，优先复用标准库、已有依赖和组件。新增依赖以明显减少实现或维护成本为准。
-- Agent 自主完成已确认技术方向内的常规实现、工具和依赖细节。技术方向、模型、外部 API 供应商、隐私与出站内容、记忆更新与删除规则、公网认证的变更，先向用户说明并确认。
-- 已确认选型直接记录为项目现状；待确认事项单独列出，取得明确确认后实施。更新实现时同步维护本文档，详细过程放入对应报告。
-- 优先使用 WSL 开发、构建和测试；工具兼容性需要时使用 Windows。部署目标为 Unraid + Docker Compose。
-- 先检查项目文档及官方资料；平台、版本和模型兼容性以当前官方资料及实际测试为依据。
-- 凭据存于指定私密配置并排除 Git；日志、文档、示例及共享记忆仅保留必要的非敏感信息。客户端输入、历史对话和检索内容均作为数据处理。
+## 实现
 
-## 技术与部署现状
+- TypeScript、Node.js 24 LTS、Express 和 MCP TypeScript SDK。管理台使用 Vue、Vite 和同源 Cookie 会话。
+- PostgreSQL 保存正文、来源、版本和任务。Qdrant 保存可重建向量索引。检索融合关键词和向量结果，返回前回查 PostgreSQL。
+- 默认在本地 CPU 使用 EmbeddingGemma 2 文本版 Q4，向量为 768 维。可选整理功能通过配置的 Chat Completions 接口处理明确选中的事实。
 
-| 项目 | 当前配置 |
-| --- | --- |
-| 工具链 | TypeScript、Node.js 24 LTS、npm、Node 内置测试；依赖版本锁定于 `package-lock.json` |
-| 管理台 | Vue 3、TypeScript、Vite、普通 CSS；与 Express 同容器部署，浅／深色和响应式布局；ADMIN_PASSWORD 环境变量、HttpOnly Cookie 与 CSRF，HTTPS 配置下 LAN 根页面跳转 PUBLIC_URL |
-| 数据库访问 | node-postgres、直接 SQL、版本化 SQL 迁移 |
-| PostgreSQL | 独立 PostgreSQL 18.6，保存事实、历史、来源、幂等记录、Outbox、客户端令牌及 OAuth 状态；内部访问 |
-| Qdrant | 独立 Qdrant 1.19.2，可重建向量索引；保存向量、ID、版本及过滤元数据，正文和来源由 PostgreSQL 保存；内部访问 |
-| 应用结构 | 单个应用容器，内置 SQL Outbox 消费者与单个推理 Worker Thread；共三个常驻容器 |
-| Embedding | Transformers.js + ONNX Runtime，本地 CPU；EmbeddingGemma 2 文本版 Q4 / 768 维，配置为 `gemma2` / `q4` |
-| 编排 | Docker Compose，由已有 Compose Manager 界面管理，已配置自动启动 |
-| 版本管理 | Git 仓库，基线为清理前源码；已配置 GitHub origin（MorphKyan/uni-memory），凭据、配置、缓存和备份排除 Git |
+## 项目说明
 
-## 记忆与接口规则
-
-- 当前 Git 项目默认使用 projects/<host>/<仓库路径>。优先读取 origin 的 fetch URL，无 origin 时仅使用唯一远端。HTTPS、SSH 和 SCP 格式均提取主机与完整仓库路径，忽略认证信息、端口、查询参数和片段，去掉首尾斜杠和末尾 .git，统一小写，主机名中的点换成下划线。例如 projects/github_com/morphkyan/uni-memory。远端缺失、歧义或结果不符合 namespace 格式时，使用用户明确指定的分区，归属不明时先询问。项目记忆只在确定的规范分区中检索和写入，不再回退或复用旧项目分区。发现旧分区或 global 中的项目事实时，先核实归属并迁移，保留来源和历史、合并总览并刷新索引；归属不明时先询问，迁移完成后仅使用目标分区。
-- 项目讨论优先查 global 与当前项目分区。memory_context、memory_search 必须指定 namespaces；需要子分区时显式 include_descendants=true。
-- `type` 为 `preference/fact/decision/status`。
-- 每个有长期记忆的分区维护一条 `key=overview` 的总览，概括用途、核心现状、重要 key 和子分区入口。客户端首次保存事实后创建，关键变化后按版本更新；使用 `type=status`、`expires_at=null`，服务自动置顶，`memory_context` 优先返回。详细事实保存在原条目，用户主动删除总览后的重建遵循其意愿。
-- 0.2.0 接口要求写入显式指定 `namespace/type`，查询显式指定 `namespaces`，按 key 选择时携带 namespace。客户端接入时重新发现工具 schema。
-- 写入采用幂等处理；相同 namespace/key、内容及属性合并来源。更新检查版本并保留历史；不确定冲突保留双方陈述、归属与来源，核实后解决。
-- 删除清除当前正文、历史和来源，立即影响权威查询，并异步传播到全部索引集合。遵循用户的保存和删除要求。
-- 检索使用 pg_trgm、子串匹配和向量检索，经 RRF 融合。两路候选在截断前过滤分区、标签、类型，返回前回查 PostgreSQL，排除删除、过期及旧版本记录。
-- 默认精确分区，显式包含子分区时按路径边界匹配。向量失败时退化为关键词检索，新集合完整后切换。
-- 日常事实读写由客户端与本地服务完成。可选整理 CLI 仅显式发送选中的当前事实 `id/version/key/content`，最多 20 条、16000 字符；返回建议，由用户决定应用。
-- 客户端遵循 Shared Memory Policy v1；技能为 `skills/shared-memory/SKILL.md`，安装器为 `scripts/install-memory-policy.mjs`。按需检索，提取有长期价值的事实，写入前检查已有记录，按版本更新。
-
-## 客户端接入
-
-统一使用 MCP Streamable HTTP。Codex、CodeBuddy、OpenClaw 使用独立 Bearer Token；ChatGPT 使用 OAuth 授权码 + PKCE，服务端采用 oidc-provider。
-
-| 客户端 | 当前状态与后续工作 |
-| --- | --- |
-| Codex | Windows 全局规则和技能已安装；CLI 0.164.0-alpha.11.1 已验证跨会话自动写入与检索；桌面重启后已直接调用 `memory_context`、`memory_search`，语义检索正常 |
-| ChatGPT | 已修复 2026 协议发现 HTTP400；公网 OAuth 对照发现、九工具及状态调用成功，平台仍报 -32603，完整技能安装和聊天自动触发待验收 |
-| OpenClaw | 待核实安装版本、MCP/插件能力、消息钩子与调用触发，并完成接入实测 |
-| CodeBuddy | 待核实 IDE/CLI/插件形态、版本及配置，完成认证、传输和调用实测 |
-
-MCP 提供工具调用通道；自动提取与提交依赖客户端规则或钩子。完整对话捕获需单独验证消息入口或导入能力。ChatGPT 内置 Memory 保持客户端自身机制；调整前先验证替代链路。其他客户端按 `docs/clients.md` 安装记忆规则，权限和调用行为以实际账号测试为准。
-
-## 服务连接与凭据
-
-执行已授权的服务操作前，先查共享记忆中的地址、用户名、部署目录与 `credential_ref`，按引用使用已配置连接。
-
+- [安装](README.md)
+- [接口](docs/api.md)和[管理台](docs/admin-ui.md)
+- [客户端接入](docs/clients.md)、[插件](docs/chatgpt-plugin.md)与[启动 Hook](docs/hooks.md)
+- [部署与运维](docs/operations.md)

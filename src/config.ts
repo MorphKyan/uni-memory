@@ -31,7 +31,7 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
     adminPassword: env.ADMIN_PASSWORD ? z.string().min(16).max(1024).parse(env.ADMIN_PASSWORD) : undefined,
     oauthClients: env.OAUTH_CLIENTS_JSON ?? '[]',
     organizeEnabled: env.EXTERNAL_ORGANIZE_ENABLED === 'true',
-    llmBase: env.LLM_BASE_URL ?? 'https://api.example.invalid/v1',
+    llmBase: env.LLM_BASE_URL,
     llmModel: env.LLM_MODEL,
     llmKey: env.LLM_API_KEY,
   };

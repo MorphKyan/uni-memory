@@ -37,7 +37,7 @@ Codex 合并 `hooks.json`，CodeBuddy 合并 `settings.json`，保留其他设�
 
 Codex 须按官方要求在 `/hooks` 或桌面 Settings > Hooks 审阅并信任定义。安装器不绕过信任，也不替用户写信任记录。其他客户端遵循各自机制。
 
-Windows Codex 使用 PowerShell 执行命令，安装器为带引号的 Node 绝对路径添加 `&` 调用运算符。早期安装命令缺少该前缀，在 cmd 测试可通过，但宿主会返回 `exit code 1`。重新运行安装器可替换旧处理器而不重复添加；命令改变后须在宿主重新审阅信任。Windows 验收须使用 PowerShell，不能仅用 Node `shell: true`（默认 cmd）代替。
+Windows Codex 的独立 Hook 命令使用 PowerShell 调用运算符。重新运行安装器可更新命令，命令改变后需要重新审阅 Hook 信任。
 
 ## 原生插件打包
 
@@ -46,12 +46,3 @@ node scripts/build-agent-plugin.mjs --output /new/path/uni-memory-agent
 ```
 
 输出 `.codex-plugin/plugin.json`、`.claude-plugin/plugin.json`、`skills/shared-memory/` 和 `hooks/`；拒绝覆盖已有目录。按宿主的本地插件或市场流程安装此目录。Hook 用宿主提供的 `PLUGIN_ROOT`、`CODEBUDDY_PLUGIN_ROOT` 或 `CLAUDE_PLUGIN_ROOT` 定位文件。与仅供 ChatGPT OAuth 的 `scripts/build-chatgpt-plugin.mjs` 分开；不向 ChatGPT 包加入本地命令 Hook。
-
-当前已验证脚本、独立安装与原生插件生成产物；CodeBuddy/OpenClaw 实际账号事件和技能加载仍待验收。不承诺所有客户端继承相同的父／子 Agent 上下文或支持相同事件。
-
-## 官方依据
-
-- [Codex Hooks](https://learn.chatgpt.com/docs/hooks)：事件、配置合并、插件声明、上下文输出与信任流程。
-- [CodeBuddy Hooks](https://www.codebuddy.cn/docs/cli/hooks)：全局 settings、SessionStart/SubagentStart 和事件输出。版本能力以实际安装为准。
-
-恢复事件的上下文插入位置与缓存效果由宿主决定；本项目直接排除 resume，不假设追加或前插。

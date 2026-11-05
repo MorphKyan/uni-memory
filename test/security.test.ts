@@ -24,15 +24,17 @@ test('scrypt、权限与公网 URL 校验', async () => {
   assert.doesNotThrow(() => requireScope({ clientId: 'a', scopes: ['memory:admin'] }, 'memory:write'));
   assert.throws(() => config({ PUBLIC_URL: 'http://public.example' }));
   assert.throws(() => config({ PUBLIC_URL: 'https://public.example/path' }));
-  assert.throws(() => config({ PUBLIC_URL: `http://${[10, 0, 0, 1].join('.')}:3100` }));
-  assert.doesNotThrow(() => config({ PUBLIC_URL: `http://${[10, 0, 0, 1].join('.')}:3100`, ALLOW_INSECURE_LAN_HTTP: 'true', OAUTH_ENABLED: 'false' }));
-  assert.throws(() => config({ PUBLIC_URL: `http://${[10, 0, 0, 1].join('.')}:3100`, ALLOW_INSECURE_LAN_HTTP: 'true', OAUTH_ENABLED: 'true' }));
+  const lanHost = [10, 0, 0, 1].join('.');
+  const lanUrl = `http://${lanHost}:3100`;
+  assert.throws(() => config({ PUBLIC_URL: lanUrl }));
+  assert.doesNotThrow(() => config({ PUBLIC_URL: lanUrl, ALLOW_INSECURE_LAN_HTTP: 'true', OAUTH_ENABLED: 'false' }));
+  assert.throws(() => config({ PUBLIC_URL: lanUrl, ALLOW_INSECURE_LAN_HTTP: 'true', OAUTH_ENABLED: 'true' }));
   assert.throws(() => config({ PUBLIC_URL: 'http://203.0.113.1:3100', ALLOW_INSECURE_LAN_HTTP: 'true' }));
   assert.throws(() => config({ PUBLIC_URL: 'http://lan-host:3100', ALLOW_INSECURE_LAN_HTTP: 'true' }));
-  const https = config({ PUBLIC_URL: 'https://memory.example.com', OAUTH_ENABLED: 'true', ALLOWED_HOSTS: [10, 0, 0, 1].join('.') });
+  const https = config({ PUBLIC_URL: 'https://memory.example.com', OAUTH_ENABLED: 'true', ALLOWED_HOSTS: lanHost });
   assert(https.allowedHosts.includes('memory.example.com'));
-  assert(https.allowedHosts.includes([10, 0, 0, 1].join('.')));
-  assert(!config({ PUBLIC_URL: 'https://memory.example.com' }).allowedHosts.includes([10, 0, 0, 1].join('.')));
+  assert(https.allowedHosts.includes(lanHost));
+  assert(!config({ PUBLIC_URL: 'https://memory.example.com' }).allowedHosts.includes(lanHost));
   for (const host of ['*', '*.example.com', 'example.com:3100', 'https://example.com', 'example.com/path']) {
     assert.throws(() => config({ ALLOWED_HOSTS: host }));
   }

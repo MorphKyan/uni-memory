@@ -17,7 +17,7 @@ await writeFile('.env', [
   `QDRANT_API_KEY=${randomBytes(32).toString('hex')}`,
   'OAUTH_ENABLED=true', `OWNER_PASSWORD_HASH=${hash}`, `OAUTH_COOKIE_KEY=${randomBytes(48).toString('base64url')}`,
   'OAUTH_CLIENTS_JSON=[]', 'EMBEDDING_MODEL=gemma2', 'EMBEDDING_DTYPE=q4',
-  'EXTERNAL_ORGANIZE_ENABLED=false', 'LLM_BASE_URL=https://api.example.invalid/v1', 'LLM_MODEL=', 'LLM_API_KEY=', '',
+  'EXTERNAL_ORGANIZE_ENABLED=false', 'LLM_BASE_URL=', 'LLM_MODEL=', 'LLM_API_KEY=', '',
 ].join('\n'), { mode: 0o600, flag: 'wx' });
 if (process.platform === 'linux' && process.getuid?.() === 0) {
   for (const path of ['.secrets', '.secrets/jwks.json', '.secrets/owner-password']) await chown(path, 1000, 1000);

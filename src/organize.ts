@@ -4,7 +4,7 @@ import type { Config } from './config.js';
 import { AppError, rejectSecrets } from './validation.js';
 
 export async function organize(store: Store, cfg: Config, ids: string[], timeout = 30000) {
-  if (!cfg.organizeEnabled || !cfg.llmKey || !cfg.llmModel) throw new AppError(503, 'organize_not_configured');
+  if (!cfg.organizeEnabled || !cfg.llmBase || !cfg.llmKey || !cfg.llmModel) throw new AppError(503, 'organize_not_configured');
   z.array(z.uuid()).min(1).max(20).parse(ids);
   const facts = await Promise.all([...new Set(ids)].map(async id => {
     const memory = await store.get({ id });

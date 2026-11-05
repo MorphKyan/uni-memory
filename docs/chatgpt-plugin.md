@@ -1,28 +1,11 @@
 # ChatGPT 自动记忆插件
 
-## 实现范围
+插件将 MCP 连接配置和自动记忆 Skill 打包在一起。MCP 使用 OAuth 授权码和 PKCE，服务在 `OAUTH_CLIENTS_JSON` 中登记客户端及回调。
 
-复用现有九个 MCP 工具、OAuth/PKCE 和 Shared Memory Policy v1，不增加推理模型、外部 API、数据库迁移或依赖。`plugins/uni-memory` 是源模板；打包器将权威规则复制进插件，并生成实际 MCP 连接配置。源模板本身不是可独立安装的成品。
-
-自动记忆由 ChatGPT 模型执行：缺少个人/项目背景时检索，出现长期偏好、稳定事实、决策或纠正时主动去重和保存，按版本维护原事实与总览。技能默认允许自动选择，受账号能力、插件启用状态及工具审批约束；没有后台监听全部聊天或保证每轮执行的机制。删除仍需明确请求，完整聊天和凭据仍不保存。
-
-## 打包与连接
-
-打包实际连接（输出目录需不存在）：
+在仓库根目录运行打包器，将 `MCP_URL` 替换为服务的 HTTPS MCP 入口，将 `CLIENT_ID` 替换为已登记的客户端 ID：
 
 ```sh
-npm run plugin:build -- --mcp-url MCP_URL --client-id chatgpt-personal --output .cache/chatgpt-uni-memory
+npm run plugin:build -- --mcp-url MCP_URL --client-id CLIENT_ID --output .cache/chatgpt-uni-memory
 ```
 
-输出目录的父目录需已存在，输出目录必须不存在。打包器拒绝 HTTP、URL 中凭据、查询参数与片段，并拒绝覆盖旧目录。配置只包含非敏感地址、客户端 ID 和权限；口令及 Token 不打包。
-
-将**输出目录内**的 `plugin.json`、`mcp.json` 和 `skills/` 压缩到 ZIP 根目录。在 [ChatGPT 插件页](https://chatgpt.com/plugins)通过添加菜单上传；实际导入/安装流程仍需账号验证。也可先添加自定义 MCP，配置 OAuth，查看工具发现与授权是否成功，再安装完整技能包。仅连接 MCP 不能证明技能已经安装。旧本机打包产物已于 2026-11-05 清理，安装时按上述命令重新生成以包含最新规则。此前 Edge 上传工具提示须在扩展详情开启“允许访问文件 URL”；尚未修改该权限。用户已明确同意创建当前 ChatGPT 连接并授予 memory:read/memory:write，但尚未确认授权成功。
-
-安装后分别在桌面和网页新聊天中启用插件，验证以下行为并记录实际工具调用及结果：
-
-1. 无“记住”字样的稳定偏好触发搜索、保存和总览维护；同一事实再次陈述不新增重复条目。
-2. 新聊天询问该偏好时检索成功，明确纠正时按版本更新并保留历史。
-3. “不要保存”内容不写入；闲聊不写入；引用或推测不作为用户已确认事实。
-4. 明确删除时读取版本再删除；连接失败或版本冲突时不声称成功。
-
-使用专门标记的合成事实做验收；合成数据删除也应取得明确授权。此文列出的是验收步骤，不表示已经执行。
+输出包含 `plugin.json`、`mcp.json` 和 `skills/`。打包时以输出目录内的文件和目录作为 ZIP 根目录。
