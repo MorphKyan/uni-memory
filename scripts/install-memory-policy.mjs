@@ -51,7 +51,8 @@ const quote = value => {
   if (/["\r\n$`%!]/.test(value)) throw new Error('Hook 路径包含不支持的 Shell 字符');
   return '"' + value.replaceAll('\\', '/') + '"';
 };
-const command = `${quote(process.execPath)} ${quote(hookScript)}`;
+// Codex 在 Windows 使用 PowerShell；带引号的可执行路径必须用调用运算符。
+const command = `${process.platform === 'win32' && client === 'codex' ? '& ' : ''}${quote(process.execPath)} ${quote(hookScript)}`;
 // 只替换本项目的精确命令，不删除同一 matcher 中的其他处理器。
 for (const event of ['SessionStart', 'SubagentStart']) {
   if (hooks[event] !== undefined && !Array.isArray(hooks[event])) throw new Error('Hook 事件配置无效，未修改文件');

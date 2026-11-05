@@ -27,7 +27,22 @@ test('安装 Hook 保留其他设置及处理器，重复安装不累积，关�
     const own = config.hooks.SessionStart[1];
     assert(new RegExp(own.matcher).test('compact'));
     for (const source of ['resume', 'fork', 'startup-other']) assert(!new RegExp(own.matcher).test(source));
-    const run = (input: string) => spawnSync(own.hooks[0].command, { shell: true, input, encoding: 'utf8', timeout: 4000 });
+    const run = (input: string) => process.platform === 'win32'
+      ? spawnSync('powershell.exe', ['-NoProfile', '-Command', own.hooks[0].command], { input, encoding: 'utf8', timeout: 4000 })
+      : spawnSync(own.hooks[0].command, { shell: true, input, encoding: 'utf8', timeout: 4000 });
+    if (process.platform === 'win32') {
+      assert(own.hooks[0].command.startsWith('& "'));
+      // 从旧版 cmd 命令升级时只保留一个处理器。
+      const legacy = JSON.parse(first);
+      for (const event of ['SessionStart', 'SubagentStart']) {
+        for (const group of legacy.hooks[event]) for (const handler of group.hooks) {
+          if (handler.command.startsWith('& ')) handler.command = handler.command.slice(2);
+        }
+      }
+      await writeFile(path, JSON.stringify(legacy));
+      install(home, '--client', 'codex', '--hooks', 'on');
+      assert.equal(await readFile(path, 'utf8'), first);
+    }
     for (const event of [
       { hook_event_name: 'SessionStart', source: 'startup' },
       { hook_event_name: 'SessionStart', source: 'clear' },

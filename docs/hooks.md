@@ -37,6 +37,8 @@ Codex 合并 `hooks.json`，CodeBuddy 合并 `settings.json`，保留其他设�
 
 Codex 须按官方要求在 `/hooks` 或桌面 Settings > Hooks 审阅并信任定义。安装器不绕过信任，也不替用户写信任记录。其他客户端遵循各自机制。
 
+Windows Codex 使用 PowerShell 执行命令，安装器为带引号的 Node 绝对路径添加 `&` 调用运算符。早期安装命令缺少该前缀，在 cmd 测试可通过，但宿主会返回 `exit code 1`。重新运行安装器可替换旧处理器而不重复添加；命令改变后须在宿主重新审阅信任。Windows 验收须使用 PowerShell，不能仅用 Node `shell: true`（默认 cmd）代替。
+
 ## 原生插件打包
 
 ```sh
