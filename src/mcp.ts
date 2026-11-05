@@ -8,7 +8,7 @@ import { scopeSchema } from './scope.js';
 import { sharedMemoryPolicy } from './policy.js';
 import type { MemoryStatus } from './status.js';
 
-export function createMcpServer(store: Store, search: Search, status: MemoryStatus, identity: Identity) {
+export function createMcpServer(store: Store, search: Search, status: MemoryStatus, identity: Identity, audit?: (id: string | number, error?: string) => void) {
   const server = new McpServer({ name: 'uni-memory', version: '0.3.2' }, {
     instructions: sharedMemoryPolicy,
   });
@@ -17,13 +17,16 @@ export function createMcpServer(store: Store, search: Search, status: MemoryStat
       description, inputSchema: schema,
       annotations: { readOnlyHint: scope === 'memory:read', destructiveHint: name === 'memory_delete', idempotentHint: true, openWorldHint: false },
       _meta: { securitySchemes: [{ type: 'oauth2', scopes: [scope] }] },
-    }, async input => {
+    }, async (input, context) => {
       try {
         requireScope(identity, scope);
         const value = await run(input);
+        audit?.(context.mcpReq.id, value && typeof value === 'object' && 'status' in value && value.status === 'conflict' ? 'conflict' : undefined);
         return { content: [{ type: 'text', text: JSON.stringify(value) }] };
       } catch (error) {
-        return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: error instanceof AppError ? error.code : error instanceof z.ZodError ? 'invalid_input' : 'operation_failed' }) }] };
+        const code = error instanceof AppError ? error.code : error instanceof z.ZodError ? 'invalid_input' : 'operation_failed';
+        audit?.(context.mcpReq.id, code);
+        return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: code }) }] };
       }
     });
   }

@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createPool } from '../src/db.js';
 import { migrate, readMigrations } from '../src/migrations.js';
@@ -17,7 +18,8 @@ import { Qdrant } from '../src/qdrant.js';
 import { Indexer } from '../src/indexer.js';
 import { config, type Config } from '../src/config.js';
 import { createApp } from '../src/app.js';
-import { issueToken, passwordHash } from '../src/auth.js';
+import { passwordHash } from '../src/auth.js';
+import { issueToken } from '../src/tokens.js';
 import { createOAuth } from '../src/oauth.js';
 import { collectionName, type Embedder } from '../src/embedding.js';
 import { organize } from '../src/organize.js';
@@ -37,7 +39,7 @@ async function request(path: string, token = reader, body?: unknown, headers: Re
 }
 before(async () => {
   await migrate(pool, await readMigrations());
-  await pool.query('TRUNCATE memories,memory_sources,memory_events,idempotency,index_jobs,index_entries,index_generations,client_tokens,oauth_state RESTART IDENTITY');
+  await pool.query('TRUNCATE memories,memory_sources,memory_events,idempotency,index_jobs,index_entries,index_generations,client_tokens,oauth_state,admin_password,request_audit RESTART IDENTITY');
   server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); assert(address && typeof address !== 'string');
   base = `http://127.0.0.1:${address.port}`;
@@ -52,6 +54,140 @@ before(async () => {
 after(async () => {
   if (server) await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
   await pool.end();
+});
+
+test('管理台持久化改密、管理现有 Bearer，并统计 REST 和 MCP 审计', async () => {
+  const password = 'synthetic-admin-bootstrap';
+  const newPassword = 'synthetic-admin-rotated';
+  const client = 'audit-' + randomUUID();
+  const clientBefore = client + '-previous';
+  const existing = await issueToken(pool, clientBefore, ['memory:read']);
+  const openUi = async () => {
+    const ui = createApp({ cfg: { ...cfg, adminPassword: password }, store, qdrant, search: new Search(store, qdrant) });
+    const local = ui.listen(0, '127.0.0.1'); await once(local, 'listening');
+    const address = local.address(); assert(address && typeof address !== 'string');
+    return {
+      root: `http://127.0.0.1:${address.port}`,
+      close: () => new Promise<void>(resolve => { local.close(() => resolve()); local.closeAllConnections(); }),
+    };
+  };
+  let ui = await openUi();
+  const browser = { 'X-Uni-Memory-UI': '1', 'Content-Type': 'application/json' };
+  const call = (path: string, body?: unknown, headers: Record<string, string> = {}) => fetch(ui.root + path, {
+    method: body === undefined ? 'GET' : 'POST', headers: { ...browser, ...headers },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  async function login(value: string) {
+    const response = await call('/ui/login', { password: value });
+    assert.equal(response.status, 200);
+    return { Cookie: response.headers.getSetCookie()[0]!.split(';')[0]!, 'X-CSRF-Token': (await response.json()).csrf as string };
+  }
+  try {
+    const session = await login(password);
+    const otherSession = await login(password);
+    assert.equal((await call('/ui/bearers', undefined, { Authorization: `Bearer ${admin}` })).status, 401);
+    assert.equal((await call('/ui/audit')).status, 401);
+    const listed = await (await call('/ui/bearers', undefined, session)).json();
+    const old = listed.find((row: { id: string }) => row.id === existing.id);
+    assert.equal(old.client_id, clientBefore);
+    assert(!JSON.stringify(listed).includes(existing.token));
+    assert(!JSON.stringify(listed).includes('token_hash'));
+    assert.equal((await call('/ui/bearers', { client_id: client, scopes: ['memory:read'] }, { Cookie: session.Cookie })).status, 403);
+    const created = await call('/ui/bearers', { client_id: client, scopes: ['memory:read'], days: 1 }, session);
+    assert.equal(created.status, 201);
+    const issued = await created.json();
+    assert.equal((await request('/v1/namespaces', issued.token)).status, 200);
+
+    const route = '/ui/bearers/' + existing.id;
+    const expires = new Date(Date.now() + 2 * 86400_000).toISOString();
+    const edited = await call(route + '/edit', {
+      expected_version: old.version, client_id: client, scopes: ['memory:read', 'memory:write'], expires_at: expires,
+    }, session);
+    assert.equal(edited.status, 200);
+    const settings = (await edited.json()).bearer;
+    assert.equal(settings.expires_at, expires);
+    assert.deepEqual(settings.scopes, ['memory:read', 'memory:write']);
+    assert.equal(settings.client_id, client);
+    assert.equal((await call(route + '/rotate', { expected_version: old.version }, session)).status, 409);
+    const rotated = await call(route + '/rotate', { expected_version: settings.version }, session);
+    assert.equal(rotated.status, 200);
+    const rotation = await rotated.json();
+    assert.equal(rotation.bearer.id, existing.id);
+    assert.equal((await request('/v1/namespaces', existing.token)).status, 401);
+
+    const query = 'synthetic private query text';
+    const read = await request('/v1/memories/search', rotation.token, { namespaces: ['global'], query }, { 'X-Forwarded-For': '198.51.100.11' });
+    assert.equal(read.status, 200);
+    const requestId = read.headers.get('x-request-id');
+    assert(requestId);
+    const rpc = (name: string, args: unknown) => request('/mcp', issued.token, {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name, arguments: args, _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } },
+    }, { Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'tools/call', 'Mcp-Name': name });
+    assert(!(await (await rpc('memory_list', { namespaces: ['global'] })).json()).result.isError);
+    assert.equal((await (await rpc('memory_write', fact())).json()).result.isError, true);
+    const batched = await request('/mcp', issued.token, [
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_context', arguments: { namespaces: ['global'] } } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'memory_write', arguments: fact() } },
+    ], { Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-03-26' });
+    assert.equal(batched.status, 200);
+    await batched.text();
+    const revoke = await call(route + '/revoke', { expected_version: rotation.bearer.version }, session);
+    assert.equal(revoke.status, 200);
+    assert.equal((await request('/v1/namespaces', rotation.token)).status, 401);
+    assert.equal((await call(route + '/rotate', { expected_version: rotation.bearer.version + 1 }, session)).status, 409);
+
+    let report;
+    for (let i = 0; i < 20; i++) {
+      const response = await call('/ui/audit?client=' + client, undefined, session);
+      assert.equal(response.status, 200);
+      report = await response.json();
+      if (report.entries.length >= 6) break;
+      await delay(25);
+    }
+    const search = report.entries.find((row: { request_id: string }) => row.request_id === requestId);
+    assert.equal(search.token_id, existing.id);
+    assert.equal(search.details.input.query_length, query.length);
+    assert(report.entries.some((row: { tool: string; outcome: string }) => row.tool === 'memory_list' && row.outcome === 'success'));
+    assert(report.entries.some((row: { tool: string; outcome: string; status: number }) => row.tool === 'memory_write' && row.outcome === 'error' && row.status === 200));
+    const batch = report.entries.find((row: { rpc_method: string }) => row.rpc_method === '(batch)');
+    assert.equal(batch.outcome, 'error');
+    assert.deepEqual(batch.details.rpc_batch.map((item: { tool: string; error?: string }) => [item.tool, item.error]),
+      [['memory_context', undefined], ['memory_write', 'insufficient_scope']]);
+    assert(report.buckets.some((bucket: { outcome: string; count: number }) => bucket.outcome === 'error' && bucket.count >= 2));
+    for (const value of [query, rotation.token, issued.token, '198.51.100.11']) assert(!JSON.stringify(report).includes(value));
+    const errors = await (await call(`/ui/audit?client=${client}&channel=mcp&outcome=error`, undefined, session)).json();
+    assert.equal(errors.entries.length, 2);
+    const paged = client + '-page';
+    await pool.query(`INSERT INTO request_audit(request_id,started_at,channel,route,method,status,duration_ms,client_id,outcome,details)
+      SELECT gen_random_uuid(),now()-n*interval '1 second','rest','/v1/namespaces','GET',200,1,$1,'success','{}'
+      FROM generate_series(1,51) n ORDER BY n`, [paged]);
+    const firstPage = await (await call(`/ui/audit?client=${paged}`, undefined, session)).json();
+    assert.equal(firstPage.entries.length, 50);
+    assert(Date.parse(firstPage.entries[0].started_at) > Date.parse(firstPage.entries[49].started_at));
+    const cursor = new URLSearchParams({ client: paged, before: firstPage.next, until: firstPage.until });
+    const lastPage = await (await call(`/ui/audit?${cursor}`, undefined, session)).json();
+    assert.equal(lastPage.entries.length, 1);
+    assert.equal(lastPage.next, null);
+    assert(Date.parse(firstPage.entries[49].started_at) > Date.parse(lastPage.entries[0].started_at));
+
+    const input = { current_password: password, new_password: newPassword };
+    assert.equal((await call('/ui/password', input, { Cookie: session.Cookie })).status, 403);
+    assert.equal((await call('/ui/password', { ...input, current_password: 'wrong' }, session)).status, 401);
+    const changed = await call('/ui/password', input, session);
+    assert.equal(changed.status, 204);
+    assert.match(changed.headers.getSetCookie()[0]!, /Expires=Thu, 01 Jan 1970/);
+    for (const headers of [session, otherSession]) assert.equal((await call('/ui/audit', undefined, headers)).status, 401);
+    const stored = (await pool.query('SELECT password_hash FROM admin_password')).rows[0].password_hash;
+    assert.match(stored, /^[a-f0-9]{32}:[a-f0-9]{128}$/);
+    await ui.close();
+    ui = await openUi();
+    assert.equal((await call('/ui/login', { password })).status, 401);
+    await login(newPassword);
+  } finally {
+    await ui.close();
+    await pool.query('DELETE FROM admin_password');
+  }
 });
 
 test('管理台密码会话在真实数据库完成读写、版本冲突、来源历史和删除', async () => {

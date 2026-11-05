@@ -1,24 +1,29 @@
-import { createHash, randomBytes, randomUUID, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { Pool } from 'pg';
 import type { RequestHandler } from 'express';
 import type Provider from 'oidc-provider';
 import { AppError } from './validation.js';
 
-export interface Identity { clientId: string; scopes: string[] }
+export interface Identity { clientId: string; scopes: string[]; tokenId?: string }
+const passwordSalt = () => randomBytes(16).toString('hex');
 export function passwordHash(password: string) {
   if (password.length < 16 || password.length > 1024) throw new Error('口令须为 16–1024 字符');
-  const salt = randomBytes(16).toString('hex');
+  const salt = passwordSalt();
   return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`;
 }
 const scryptAsync = promisify(scrypt);
 let passwordChecks = 0;
-export async function derivePassword(password: string, salt: string | Buffer) {
+export async function derivePassword(password: string, salt: string) {
   // 不排队堆积匿名登录请求，给数据库等工作留出线程池容量。
   if (passwordChecks >= 2) throw new AppError(503, 'password_check_busy');
   passwordChecks++;
   try { return await scryptAsync(password, salt, 64) as Buffer; }
   finally { passwordChecks--; }
+}
+export async function newPasswordHash(password: string) {
+  const salt = passwordSalt();
+  return `${salt}:${(await derivePassword(password, salt)).toString('hex')}`;
 }
 export async function passwordMatches(password: string, encoded: string) {
   if (password.length > 1024) return false;
@@ -29,23 +34,14 @@ export async function passwordMatches(password: string, encoded: string) {
 export function requireScope(identity: Identity, scope: string) {
   if (!identity.scopes.includes(scope) && !identity.scopes.includes('memory:admin')) throw new AppError(403, 'insufficient_scope');
 }
-export async function issueToken(pool: Pool, clientId: string, scopes: string[], days = 90) {
-  if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(clientId) || !scopes.length
-    || scopes.some(scope => !['memory:read', 'memory:write', 'memory:admin'].includes(scope))
-    || !Number.isInteger(days) || days < 1 || days > 365) throw new Error('客户端、权限或有效期无效');
-  const token = randomBytes(32).toString('base64url');
-  const id = randomUUID();
-  await pool.query('INSERT INTO client_tokens(id,client_id,token_hash,scopes,expires_at) VALUES($1,$2,$3,$4,now()+$5*interval \'1 day\')',
-    [id, clientId, createHash('sha256').update(token).digest('hex'), scopes, days]);
-  return { id, token };
-}
 export function authentication(pool: Pool, resource: string, provider?: Provider): RequestHandler {
   return async (req, res, next) => {
     try {
       const token = /^Bearer ([A-Za-z0-9._~-]{20,4096})$/.exec(req.headers.authorization ?? '')?.[1];
       if (!token) throw new AppError(401, 'authentication_required');
-      const row = (await pool.query('SELECT client_id,scopes FROM client_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()', [createHash('sha256').update(token).digest('hex')])).rows[0];
-      let identity: Identity | undefined = row && { clientId: row.client_id, scopes: row.scopes };
+      const row = (await pool.query('SELECT id,client_id,scopes,revoked_at IS NULL AND expires_at>now() AS active FROM client_tokens WHERE token_hash=$1', [createHash('sha256').update(token).digest('hex')])).rows[0];
+      if (row) res.locals.auditToken = { clientId: row.client_id, tokenId: row.id };
+      let identity: Identity | undefined = row?.active ? { clientId: row.client_id, scopes: row.scopes, tokenId: row.id } : undefined;
       if (!identity && provider) {
         const access = await provider.AccessToken.find(token);
         if (access && !access.isExpired && access.accountId === 'owner' && access.aud === resource && access.clientId) {
@@ -58,7 +54,6 @@ export function authentication(pool: Pool, resource: string, provider?: Provider
       next();
     } catch (error) {
       if (error instanceof AppError && error.status === 401) {
-        if (req.path === '/mcp') console.info(JSON.stringify({ event: 'mcp_authentication_failed', reason: error.code }));
         res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${new URL('/.well-known/oauth-protected-resource', resource)}"`);
       }
       next(error);

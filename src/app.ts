@@ -15,6 +15,7 @@ import type { Qdrant } from './qdrant.js';
 import type { Embedder } from './embedding.js';
 import { MemoryStatus } from './status.js';
 import { mountAdmin } from './admin.js';
+import { auditRequests } from './audit.js';
 
 interface Services { store: Store; search: Search; qdrant: Qdrant; cfg: Config; provider?: Provider; embedder?: Embedder }
 export function rateLimit(limit: number, windowMs = 60000): RequestHandler {
@@ -25,10 +26,14 @@ export function rateLimit(limit: number, windowMs = 60000): RequestHandler {
     let record = clients.get(key);
     if (!record || record.until <= now) {
       if (clients.size >= 10000) for (const [id, item] of clients) if (item.until <= now) clients.delete(id);
-      if (clients.size >= 10000) { res.status(429).json({ error: 'rate_limited' }); return; }
+      if (clients.size >= 10000) { res.locals.auditError = 'rate_limited'; res.status(429).json({ error: 'rate_limited' }); return; }
       record = { count: 0, until: now + windowMs }; clients.set(key, record);
     }
-    if (++record.count > limit) { res.setHeader('Retry-After', Math.ceil((record.until - now) / 1000)); res.status(429).json({ error: 'rate_limited' }); return; }
+    if (++record.count > limit) {
+      res.locals.auditError = 'rate_limited';
+      res.setHeader('Retry-After', Math.ceil((record.until - now) / 1000));
+      res.status(429).json({ error: 'rate_limited' }); return;
+    }
     next();
   };
 }
@@ -39,6 +44,7 @@ export function createApp(services: Services) {
   app.disable('x-powered-by');
   app.set('query parser', 'simple');
   if (cfg.trustProxy.length) app.set('trust proxy', cfg.trustProxy);
+  app.use(auditRequests(store.pool));
   app.use(hostHeaderValidation(cfg.allowedHosts));
   app.use((req, res, next) => {
     // 本服务不使用转发 Host；Koa OAuth 也只能看到 Express 已核实来源的协议。
@@ -49,7 +55,7 @@ export function createApp(services: Services) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
-    if (req.headers.origin && !cfg.allowedOrigins.includes(req.headers.origin)) { res.status(403).json({ error: 'invalid_origin' }); return; }
+    if (req.headers.origin && !cfg.allowedOrigins.includes(req.headers.origin)) throw new AppError(403, 'invalid_origin');
     next();
   });
   app.use(rateLimit(120));
@@ -66,7 +72,7 @@ export function createApp(services: Services) {
     res.json({ resource: cfg.resource, authorization_servers: provider ? [`${cfg.publicUrl}/oauth`] : [], scopes_supported: ['memory:read', 'memory:write'], bearer_methods_supported: ['header'] });
   });
   if (provider) mountOAuth(app, provider, cfg);
-  app.use('/v1', mountAdmin(app, cfg, rateLimit(5)));
+  app.use('/v1', mountAdmin(app, cfg, store.pool, rateLimit(5)));
   const auth = authentication(store.pool, cfg.resource, provider);
   app.use(['/v1', '/mcp'], (req, res, next) => res.locals.identity ? next() : auth(req, res, next), express.json({ limit: '32kb', strict: true }));
   function scope(name: string): RequestHandler {
@@ -99,13 +105,9 @@ export function createApp(services: Services) {
     res.json((await store.pool.query('SELECT memory_id,attempts,failed,available_at,error_code FROM index_jobs ORDER BY available_at LIMIT 100')).rows);
   });
   app.post('/mcp', async (req, res) => {
-    if (['server/discover', 'initialize', 'notifications/initialized', 'tools/list', 'tools/call', 'resources/list', 'prompts/list'].includes(req.body?.method)) {
-      res.on('finish', () => console.info(JSON.stringify({ event: 'mcp_discovery', method: req.body.method, status: res.statusCode,
-        client: (res.locals.identity as Identity).clientId,
-        protocol: /^\d{4}-\d{2}-\d{2}$/.test(req.headers['mcp-protocol-version'] as string) ? req.headers['mcp-protocol-version']
-          : /^\d{4}-\d{2}-\d{2}$/.test(req.body?.params?.protocolVersion) ? req.body.params.protocolVersion : undefined })));
-    }
-    const handler = createMcpHandler(() => createMcpServer(store, search, status, res.locals.identity));
+    const results = new Map<string | number, string | undefined>();
+    res.locals.auditToolResults = results;
+    const handler = createMcpHandler(() => createMcpServer(store, search, status, res.locals.identity, (id, error) => results.set(id, error)));
     try { await toNodeHandler(handler)(req, res, req.body); }
     finally { await handler.close(); }
   });
@@ -113,10 +115,12 @@ export function createApp(services: Services) {
   app.use((_req, res) => { res.status(404).json({ error: 'not_found' }); });
   const errors: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
     if (res.headersSent) { res.end(); return; }
-    if (error instanceof AppError) res.status(error.status).json({ error: error.code });
-    else if (error instanceof z.ZodError || error instanceof SyntaxError) res.status(400).json({ error: 'invalid_input' });
-    else if ((error as { type?: string }).type === 'entity.too.large') res.status(413).json({ error: 'request_too_large' });
-    else res.status(500).json({ error: 'internal_error' });
+    const { status, code } = error instanceof AppError ? error
+      : error instanceof z.ZodError || error instanceof SyntaxError ? { status: 400, code: 'invalid_input' }
+        : (error as { type?: string }).type === 'entity.too.large' ? { status: 413, code: 'request_too_large' }
+          : { status: 500, code: 'internal_error' };
+    res.locals.auditError = code;
+    res.status(status).json({ error: code });
   };
   app.use(errors);
   return app;

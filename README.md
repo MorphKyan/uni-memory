@@ -11,7 +11,7 @@ npm run init
 docker compose up -d --build
 ```
 
-如需使用网页管理台，在启动前于本地 `.env` 中设置至少 16 字符的 `ADMIN_PASSWORD`。启动后访问 `PUBLIC_URL` 对应的根路径。
+如需使用网页管理台，在启动前于本地 `.env` 中设置至少 16 字符的初始 `ADMIN_PASSWORD`。访问 `PUBLIC_URL` 对应的根路径，可管理记忆、管理员密码和 Bearer 凭据，查看服务状态和请求审计。[管理台使用说明](docs/admin-ui.md)
 
 使用 Bearer Token 接入时，为每个客户端生成独立令牌，并将 Streamable HTTP MCP 地址设为服务的 `/mcp` 路径：
 

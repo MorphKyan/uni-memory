@@ -1,6 +1,7 @@
 import { createPool, transaction } from './db.js';
 import { config } from './config.js';
-import { issueToken, passwordHash } from './auth.js';
+import { passwordHash } from './auth.js';
+import { issueToken } from './tokens.js';
 import { Store } from './store.js';
 import { Indexer } from './indexer.js';
 import { Qdrant } from './qdrant.js';
@@ -25,7 +26,7 @@ if (command === 'password-hash') {
       case 'token-list':
         console.log(JSON.stringify((await pool.query('SELECT id,client_id,scopes,expires_at,revoked_at FROM client_tokens ORDER BY expires_at')).rows, null, 2)); break;
       case 'token-revoke':
-        await pool.query('UPDATE client_tokens SET revoked_at=now() WHERE id=$1', [args[0]]); console.log('已撤销'); break;
+        await pool.query('UPDATE client_tokens SET revoked_at=now(),version=version+1 WHERE id=$1 AND revoked_at IS NULL', [args[0]]); console.log('已撤销'); break;
       case 'oauth-revoke':
         await pool.query("DELETE FROM oauth_state WHERE grant_id=$1 OR (model='Grant' AND id=$1)", [args[0]]); console.log('已撤销 OAuth 授权'); break;
       case 'reindex': await new Indexer(pool, new Qdrant(cfg)).rebuild(); console.log('已登记全量重建任务'); break;

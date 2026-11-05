@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ApiError, request, operationId, types, timestamp, localDate } from './api';
 import type { Memory, History, Status } from './api';
+import AuditPage from './AuditPage.vue';
+import BearerPage from './BearerPage.vue';
 
 const ready = ref(false),
   enabled = ref(true),
@@ -14,6 +16,8 @@ const error = ref(''),
   busy = ref(false),
   loading = ref(false),
   detailLoading = ref(false);
+const sensitive = ref(false);
+const passwordForm = ref({ current: '', next: '', confirmation: '' });
 const theme = ref('light');
 try {
   theme.value =
@@ -36,7 +40,20 @@ watch(
 );
 const namespaces = ref<{ namespace: string; count: number }[]>([]),
   namespace = ref('');
-const section = ref<'memories' | 'status'>('memories');
+const navigation = [
+  { label: '数据', items: [{ id: 'memories', label: '记忆库' }] },
+  { label: '访问管理', items: [{ id: 'bearers', label: 'Bearer 凭据' }, { id: 'password', label: '管理员密码' }] },
+  { label: '运行与审计', items: [{ id: 'status', label: '服务状态' }, { id: 'audit', label: '请求审计' }] },
+] as const;
+type Section = typeof navigation[number]['items'][number]['id'];
+const section = ref<Section>('memories');
+const pages = {
+  memories: { label: '记忆库', title: '全部记忆', description: '检索、核对和维护跨客户端的长期记忆。' },
+  status: { label: '服务状态', title: '服务状态', description: '查看数据库、模型、索引覆盖和后台任务。' },
+  bearers: { label: 'Bearer 凭据', title: 'Bearer 凭据', description: '为 REST 和 MCP 客户端签发令牌，管理访问权限和有效期。' },
+  password: { label: '管理员密码', title: '管理员密码', description: '更新登录此管理台使用的密码。' },
+  audit: { label: '请求审计', title: '请求审计', description: '按时间、入口和结果统计请求，并查看每次请求的服务端记录。' },
+};
 const query = ref(''),
   tagFilter = ref(''),
   typeFilter = ref(''),
@@ -82,22 +99,32 @@ const modelStates: Record<string, string> = {
   unknown: '未知',
 };
 const total = computed(() => namespaces.value.reduce((sum, item) => sum + item.count, 0));
-const title = computed(() => (section.value === 'status' ? '服务状态' : namespace.value || '全部记忆'));
+const page = computed(() => pages[section.value]);
+const group = computed(() => navigation.find(group => group.items.some(item => item.id === section.value))?.label);
+function signOut() {
+  authenticated.value = false;
+  csrf.value = '';
+  memories.value = [];
+  selected.value = null;
+  editing.value = false;
+  history.value = [];
+  namespaces.value = [];
+  status.value = null;
+  tasks.value = [];
+  sensitive.value = false;
+  passwordForm.value = { current: '', next: '', confirmation: '' };
+}
 function fail(cause: unknown) {
   if (cause instanceof DOMException && cause.name === 'AbortError') return;
   if (cause instanceof ApiError) {
     if (cause.status === 401 && cause.message !== 'invalid_password') {
-      authenticated.value = false;
-      csrf.value = '';
-      memories.value = [];
-      selected.value = null;
-      history.value = [];
-      status.value = null;
-      tasks.value = [];
-      editing.value = false;
+      signOut();
     }
     const messages: Record<string, string> = {
       invalid_password: '密码不正确，请重试。',
+      password_unchanged: '新密码必须与当前密码不同。',
+      password_changed: '管理员密码已被更新，请重新登录。',
+      bearer_changed: '令牌已被更新或撤销，已重新读取列表。',
       authentication_required: '登录已过期，请重新登录。',
       invalid_token: '登录已过期，请重新登录。',
       admin_disabled: '管理台尚未配置登录密码。',
@@ -131,6 +158,7 @@ async function session() {
 async function login() {
   loggingIn.value = true;
   error.value = '';
+  notice.value = '';
   try {
     const result = await request<{ csrf: string }>('/ui/login', { password: password.value });
     password.value = '';
@@ -145,25 +173,38 @@ async function login() {
   }
 }
 function canLeave() {
-  return !busy.value && (!dirty.value || window.confirm('有尚未保存的修改，确定放弃吗？'));
+  return !busy.value && (!dirty.value || window.confirm('有尚未保存的修改，确定放弃吗？'))
+    && (!sensitive.value || window.confirm('离开后无法再次查看当前明文令牌。确定已经保存？'));
 }
 async function logout() {
   if (!canLeave()) return;
   try {
     await request('/ui/logout', {}, csrf.value);
-    authenticated.value = false;
-    csrf.value = '';
-    memories.value = [];
-    selected.value = null;
-    editing.value = false;
-    history.value = [];
-    namespaces.value = [];
-    status.value = null;
-    tasks.value = [];
+    signOut();
     error.value = '';
     notice.value = '';
   } catch (cause) {
     fail(cause);
+  }
+}
+async function changePassword() {
+  if (busy.value) return;
+  error.value = '';
+  if (passwordForm.value.next !== passwordForm.value.confirmation) {
+    error.value = '两次输入的新密码不一致。';
+    return;
+  }
+  busy.value = true;
+  try {
+    await request('/ui/password', { current_password: passwordForm.value.current, new_password: passwordForm.value.next }, csrf.value);
+    signOut();
+    notice.value = '管理员密码已更新，请使用新密码登录。';
+  } catch (cause) {
+    passwordForm.value.current = '';
+    if (cause instanceof ApiError && cause.message === 'password_changed') signOut();
+    fail(cause);
+  } finally {
+    busy.value = false;
   }
 }
 async function refreshNamespaces() {
@@ -249,20 +290,25 @@ async function loadStatus() {
       tasks.value = jobs;
     }
   } catch (cause) {
-    fail(cause);
+    if (sequence === statusSequence) fail(cause);
   } finally {
     if (sequence === statusSequence) loading.value = false;
   }
 }
 async function reload() {
   if (section.value === 'memories') await loadList();
-  else await loadStatus();
+  else if (section.value === 'status') await loadStatus();
 }
-async function navigate(nextSection: typeof section.value, nextNamespace = '') {
+async function navigate(nextSection: Section, nextNamespace = '') {
+  if (nextSection === section.value && nextNamespace === namespace.value) return;
   if (!canLeave()) return;
+  activeList?.abort();
+  ++listSequence;
   ++detailSequence;
   ++statusSequence;
   section.value = nextSection;
+  sensitive.value = false;
+  passwordForm.value = { current: '', next: '', confirmation: '' };
   namespace.value = nextNamespace;
   selected.value = null;
   editing.value = false;
@@ -270,7 +316,9 @@ async function navigate(nextSection: typeof section.value, nextNamespace = '') {
   conflict.value = null;
   deleteOpen.value = false;
   history.value = [];
+  error.value = '';
   notice.value = '';
+  loading.value = false;
   status.value = null;
   tasks.value = [];
   query.value = '';
@@ -279,7 +327,13 @@ async function navigate(nextSection: typeof section.value, nextNamespace = '') {
   descendants.value = false;
   memories.value = [];
   cursor.value = null;
+  window.scrollTo(0, 0);
   await reload();
+}
+async function selectNamespace(event: Event) {
+  const input = event.target as HTMLSelectElement;
+  await navigate('memories', input.value);
+  input.value = namespace.value;
 }
 async function open(memory: Memory, check = true) {
   if (check && !canLeave()) return;
@@ -425,7 +479,7 @@ async function remove() {
   }
 }
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (dirty.value || busy.value) {
+  if (dirty.value || busy.value || sensitive.value) {
     event.preventDefault();
     event.returnValue = '';
   }
@@ -454,8 +508,9 @@ onUnmounted(() => {
     <form class="login-card" @submit.prevent="login">
       <p class="eyebrow">WELCOME BACK</p>
       <h2>进入记忆库</h2>
-      <p class="muted">使用部署时配置的管理密码登录。</p>
+      <p class="muted">使用当前管理员密码登录。</p>
       <div v-if="error" class="alert error" role="alert">{{ error }}</div>
+      <div v-if="notice" class="alert success" role="status">{{ notice }}</div>
       <template v-if="enabled"
         ><label for="password">管理密码</label
         ><input
@@ -486,32 +541,20 @@ onUnmounted(() => {
       <a class="brand" href="#" @click.prevent="navigate('memories')"
         ><span class="brand-mark small-mark">u</span><span>uni-memory<small>共享记忆管理台</small></span></a
       >
-      <p class="nav-caption">工作空间</p>
-      <button
-        class="nav-item"
-        :class="{ active: section === 'memories' && !namespace }"
-        @click="navigate('memories')"
-      >
-        <span>◫ &nbsp; 全部记忆</span><span class="count">{{ total }}</span>
-      </button>
-      <button class="nav-item" :class="{ active: section === 'status' }" @click="navigate('status')">
-        <span>◉ &nbsp; 服务状态</span>
-      </button>
-      <div class="nav-caption">
-        记忆分区 <span>{{ namespaces.length }}</span>
-      </div>
-      <nav class="namespace-list" aria-label="记忆分区">
-        <button
-          v-for="item in namespaces"
-          :key="item.namespace"
-          class="nav-item namespace-item"
-          :class="{ active: section === 'memories' && namespace === item.namespace }"
-          @click="navigate('memories', item.namespace)"
-        >
-          <span :title="item.namespace">{{ item.namespace }}</span
-          ><span class="count">{{ item.count }}</span>
-        </button>
-        <p v-if="!namespaces.length" class="small muted">还没有记忆，创建第一条吧。</p>
+      <nav class="main-nav" aria-label="管理台导航">
+        <div v-for="category in navigation" :key="category.label" class="nav-group">
+          <p class="nav-caption">{{ category.label }}</p>
+          <button
+            v-for="item in category.items"
+            :key="item.id"
+            class="nav-item"
+            :class="{ active: section === item.id }"
+            :aria-current="section === item.id ? 'page' : undefined"
+            @click="navigate(item.id, item.id === section ? namespace : '')"
+          >
+            {{ item.label }} <span v-if="item.id === 'memories'" class="count">{{ total }}</span>
+          </button>
+        </div>
       </nav>
       <div class="sidebar-footer">
         <span class="live-dot"></span> 私人工作空间<button class="text-button" @click="logout">退出</button>
@@ -520,7 +563,7 @@ onUnmounted(() => {
     <main class="workspace">
       <header class="topbar">
         <span
-          >工作空间 <span class="separator">/</span> {{ section === 'status' ? '服务状态' : '记忆库' }}</span
+          >{{ group }} <span class="separator">/</span> {{ page.label }}</span
         ><button
           class="icon-button"
           :aria-label="theme === 'dark' ? '切换浅色' : '切换深色'"
@@ -531,17 +574,10 @@ onUnmounted(() => {
       </header>
       <div class="page-heading">
         <div>
-          <p class="eyebrow">{{ section === 'status' ? 'SYSTEM OVERVIEW' : 'MEMORY LIBRARY' }}</p>
-          <h1>{{ title }}</h1>
-          <p class="muted">
-            {{
-              section === 'status'
-                ? '查看记忆库、推理模型与索引的当前状态。'
-                : '检索、核对和维护值得长期保存的信息。'
-            }}
-          </p>
+          <h1>{{ section === 'memories' && namespace ? namespace : page.title }}</h1>
+          <p class="muted">{{ page.description }}</p>
         </div>
-        <div class="actions">
+        <div v-if="section === 'memories' || section === 'status'" class="actions">
           <button :disabled="loading || busy" @click="refreshNamespaces().then(reload).catch(fail)">
             刷新</button
           ><button v-if="section === 'memories'" class="primary" :disabled="busy" @click="edit(true)">
@@ -568,6 +604,10 @@ onUnmounted(() => {
             /><button type="submit" :disabled="loading">搜索</button>
           </div>
           <div class="filter-row">
+            <select class="namespace-select" :value="namespace" aria-label="记忆分区" @change="selectNamespace">
+              <option value="">全部分区（{{ namespaces.length }}）</option>
+              <option v-for="item in namespaces" :key="item.namespace" :value="item.namespace">{{ item.namespace }}（{{ item.count }}）</option>
+            </select>
             <select v-model="typeFilter" aria-label="筛选类型" @change="loadList()">
               <option value="">全部类型</option>
               <option v-for="(label, key) in types" :key="key" :value="key">{{ label }}</option></select
@@ -587,7 +627,7 @@ onUnmounted(() => {
         <p v-if="degraded" class="alert">向量检索暂不可用，当前显示关键词检索结果。</p>
         <div class="library" :class="{ 'with-detail': selected || editing || detailLoading }">
           <section class="memory-list" aria-label="记忆列表" :aria-busy="loading">
-            <div class="list-caption"><span>记忆条目</span><span>类型 / 核实状态</span></div>
+            <div class="list-caption"><span>记忆条目</span><span>类型 / 置顶</span></div>
             <p v-if="loading && !memories.length" class="empty">正在加载记忆…</p>
             <div v-else-if="!memories.length" class="empty">
               <div class="empty-symbol">◇</div>
@@ -828,7 +868,7 @@ onUnmounted(() => {
           </aside>
         </div>
       </template>
-      <section v-else class="status-page" :aria-busy="loading">
+      <section v-else-if="section === 'status'" class="status-page" :aria-busy="loading">
         <p v-if="loading" class="muted" role="status">正在读取服务状态…</p>
         <template v-if="status"
           ><div class="status-banner">
@@ -936,6 +976,27 @@ onUnmounted(() => {
           </article></template
         >
       </section>
+      <BearerPage v-else-if="section === 'bearers'" v-model:busy="busy" v-model:sensitive="sensitive" :csrf="csrf" @error="fail" @start="error = ''" />
+      <AuditPage v-else-if="section === 'audit'" @error="fail" @start="error = ''" />
+      <article v-else class="panel settings-form password-panel">
+        <h2>修改管理员密码</h2>
+        <p class="muted">保存后，所有管理台会话将退出。请用新密码重新登录。</p>
+        <form @submit.prevent="changePassword">
+          <fieldset :disabled="busy">
+            <label>当前密码
+              <input v-model="passwordForm.current" type="password" autocomplete="current-password" required maxlength="1024" />
+            </label>
+            <label>新密码
+              <input v-model="passwordForm.next" type="password" autocomplete="new-password" required minlength="16" maxlength="1024" aria-describedby="password-length" />
+            </label>
+            <p id="password-length" class="small muted">使用 16–1024 个字符。</p>
+            <label>确认新密码
+              <input v-model="passwordForm.confirmation" type="password" autocomplete="new-password" required minlength="16" maxlength="1024" />
+            </label>
+            <div class="form-actions"><button class="primary">{{ busy ? '保存中…' : '保存新密码' }}</button></div>
+          </fieldset>
+        </form>
+      </article>
       <footer class="page-footer">uni-memory <span>让长期记忆清晰、可查、可维护。</span></footer>
     </main>
   </div>
