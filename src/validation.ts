@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { namespaceSchema, memoryType, scopeShape } from './scope.js';
+import { namespaceSchema, memoryType, scopeShape, deviceTags } from './scope.js';
 
 export class AppError extends Error {
   constructor(public status: number, public code: string) { super(code); }
@@ -15,6 +15,7 @@ export const writeSchema = z.object({
   key: memoryKey,
   content: z.string().trim().min(1).max(4000),
   tags: scopeShape.tags,
+  device_tags: deviceTags.optional(),
   pinned: z.boolean().default(false),
   expires_at: z.iso.datetime({ offset: true }).nullable().default(null),
   source: z.object({ reference: z.string().trim().min(1).max(512), excerpt: z.string().trim().max(512).default('') }).strict(),

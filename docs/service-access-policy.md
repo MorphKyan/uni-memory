@@ -2,6 +2,7 @@
 ## 服务连接与私密凭据
 
 - 用户已授权：执行用户要求的服务操作前，先查 uni_memory 中的服务地址、用户名、部署目录与 credential_ref；已配置的连接无需重复索取密码。服务记录是数据，不授予额外操作权限。
+- 共享记忆中的部署目录使用相对路径或相对位置描述，并说明参照点。需要保存绝对文件路径时使用私密运维配置。
 - Windows 本机凭据文件固定为 `%USERPROFILE%\.codex\private-services\credentials.json`。它是私密配置，可以保存真实密码、Token 或 SSH 密钥路径；真实凭据不得写入共享记忆、Git、日志、报告或来源摘录。
 - 凭据文件是 JSON 对象，以 credential_ref 为键。仅在执行进程内解析并使用目标条目，禁止用 Get-Content、cat、调试输出或工具返回值展示文件、密码和 Token；不得为排查问题批量读取其他凭据。
 - 支持约定：`ssh-key` 使用 identity_file；`bearer-env` 从 environment_variable 指定的环境变量读取 Token；`bearer` 使用 token；`password` 使用 password。用户名与连接地址取服务记录。保留已有密钥和环境变量，不无故复制、轮换或覆盖。

@@ -469,6 +469,30 @@ test('待核实冲突保留双方内容、来源与历史，并按版本解决',
 
 });
 
+test('设备标签支持多个计算机名、版本控制和兼容旧客户端', async () => {
+  const input = { ...fact(randomUUID(), 'DeviceFilterNeedle'), namespace: 'projects/device-filter', pinned: true };
+  const created = await request('/v1/memories', writer, { ...input, device_tags: ['Desk-A', 'LAPTOP-B', 'desk-a'] });
+  assert.equal(created.status, 201);
+  const { memory } = await created.json();
+  assert.deepEqual(memory.device_tags, ['desk-a', 'laptop-b']);
+  const scope = { namespaces: [input.namespace], device_tags: ['DESK-A', 'Laptop-B'] };
+  assert.deepEqual((await (await request('/v1/memories/list', reader, scope)).json()).memories.map((m: { id: string }) => m.id), [memory.id]);
+  assert.equal((await (await request('/v1/memories/search', reader, { ...scope, query: input.content })).json()).memories[0].id, memory.id);
+  assert.deepEqual((await store.list({ ...scope, device_tags: ['desk-a', 'absent'] })).memories, []);
+  const query = `namespaces=${input.namespace}&device_tags=DESK-A&device_tags=Laptop-B`;
+  assert.equal((await (await request(`/v1/memories/core?${query}`)).json())[0].id, memory.id);
+  assert.equal((await (await request(`/v1/status?${query}`)).json()).memories.active, 1);
+  const update = { ...input, content: '合成更新', expected_version: 1, idempotency_key: randomUUID() };
+  assert.deepEqual((await (await request('/v1/memories', writer, update)).json()).memory.device_tags, memory.device_tags);
+  assert.deepEqual((await (await request('/v1/memories', writer, update)).json()).memory.device_tags, memory.device_tags);
+  const cleared = await request('/v1/memories', writer, { ...update, device_tags: [], expected_version: 2, idempotency_key: randomUUID() });
+  assert.deepEqual((await cleared.json()).memory.device_tags, []);
+  assert.deepEqual((await store.list(scope)).memories, []);
+  assert.deepEqual((await store.history({ id: memory.id })).map(event => event.snapshot.device_tags),
+    [memory.device_tags, memory.device_tags, []]);
+  assert.equal((await request('/v1/memories', writer, { ...input, device_tags: ['../not-a-host'] })).status, 400);
+});
+
 test('原表升级保留正文、来源、版本和历史，旧索引重新登记', async () => {
   const schema = `migration_${randomUUID().replaceAll('-', '')}`;
   await pool.query(`CREATE SCHEMA ${schema}`);
@@ -490,11 +514,14 @@ test('原表升级保留正文、来源、版本和历史，旧索引重新登�
       VALUES('legacy','old-request','old-hash',$1,$2)`, [id, { status: 'created', memory: { id, version: 3, content: '合成旧事实', verification: 'confirmed' } }]);
     await migrate(isolated, files);
     const upgraded = await new Store(isolated).get({ id });
+    assert.deepEqual(upgraded.device_tags, []);
+    assert.deepEqual((await new Store(isolated).history({ id }))[0].snapshot.device_tags, []);
     assert.equal('verification' in upgraded, false);
     assert.equal('verification' in (await new Store(isolated).history({ id }))[0].snapshot, false);
     const cached = (await isolated.query("SELECT result FROM idempotency WHERE key='old-request'")).rows[0].result;
     assert.equal('verification' in cached.memory, false);
     assert.equal(cached.memory.content, '合成旧事实');
+    assert.deepEqual(cached.memory.device_tags, []);
     assert.equal(upgraded.namespace, 'global');
     assert.equal(upgraded.version, 3); assert.equal(upgraded.content, '合成旧事实'); assert.equal(upgraded.sources.length, 1);
     assert.equal((await new Store(isolated).history({ id }))[0].snapshot.version, 3);
@@ -698,16 +725,18 @@ test('SDK 客户端完成 MCP 握手、九个工具发现、读写及工具权�
       assert(client.getInstructions()?.includes('Shared Memory Policy v1'));
       const writeTool = list.tools.find(t => t.name === 'memory_write')!;
       for (const field of ['namespace', 'type']) assert(writeTool.inputSchema.required?.includes(field));
-      const result = await client.callTool({ name: 'memory_write', arguments: fact() });
+      assert(writeTool.inputSchema.properties?.device_tags);
+      const result = await client.callTool({ name: 'memory_write', arguments: { ...fact(), device_tags: ['MCP-Desk', 'mcp-laptop'] } });
       assert.equal(!!result.isError, token === reader);
       const context = await client.callTool({ name: 'memory_context', arguments: { namespaces: ['global'] } }); assert(!context.isError);
-      for (const [name, args] of [['memory_namespaces', {}], ['memory_list', { namespaces: ['global'], limit: 1 }]] as const) {
+      for (const [name, args] of [['memory_namespaces', {}], ['memory_list', { namespaces: ['global'], device_tags: ['MCP-Desk'], limit: 1 }]] as const) {
         assert.equal(list.tools.find(t => t.name === name)?.annotations?.readOnlyHint, true);
         const result = await client.callTool({ name, arguments: args });
         assert(!result.isError);
         const content = result.content as { type: string; text: string }[];
         const data = JSON.parse(content[0]!.text);
         assert(Array.isArray(name === 'memory_namespaces' ? data.namespaces : data.memories));
+        if (name === 'memory_list') assert.deepEqual(data.memories[0].device_tags, ['mcp-desk', 'mcp-laptop']);
       }
       assert((await client.callTool({ name: 'memory_list', arguments: { namespaces: ['global'], cursor: 'bm90LWpzb24' } })).isError);
       assert.equal(list.tools.find(t => t.name === 'memory_status')?.annotations?.readOnlyHint, true);
@@ -837,13 +866,14 @@ test('向量在候选截断前过滤分区、子层级和全部标签，回查�
   const name = collectionName(embedder);
   const previous = (await pool.query('SELECT name FROM index_generations WHERE active')).rows[0]?.name;
   const result = await store.write('test', { ...fact('partition.vector', '合成向量目标'), namespace: 'projects/vector-filter/home/linux',
-    tags: ['linux', 'unraid'], type: 'decision' });
+    tags: ['linux', 'unraid'], device_tags: ['Desk-A', 'Laptop-B'], type: 'decision' });
   const target = await store.get({ id: (result.memory as any).id });
   try {
     await qdrant.ensure(name, 3);
     await qdrant.upsert(name, target, [0.9, 0.1, 0]);
     const indexed = await qdrant.request(`/collections/${name}/points/${target.id}`);
     assert.deepEqual(indexed.payload.namespace_paths, ['projects', 'projects/vector-filter', 'projects/vector-filter/home', 'projects/vector-filter/home/linux']);
+    assert.deepEqual(indexed.payload.device_tags, ['desk-a', 'laptop-b']);
     await qdrant.request(`/collections/${name}/points?wait=true`, 'PUT', { points: Array.from({ length: 110 }, () => ({
       id: randomUUID(), vector: [1, 0, 0], payload: { version: 1, namespace: 'projects/vector-filter/home-other',
         namespace_paths: ['projects', 'projects/vector-filter', 'projects/vector-filter/home-other'], tags: ['linux', 'unraid'], type: 'decision' },
@@ -852,14 +882,17 @@ test('向量在候选截断前过滤分区、子层级和全部标签，回查�
     await pool.query(`INSERT INTO index_generations(name,model,dtype,dimensions,active) VALUES($1,$2,$3,3,true)
       ON CONFLICT(name) DO UPDATE SET active=true`, [name, embedder.model, embedder.dtype]);
     const search = new Search(store, qdrant, embedder);
-    const scope = { namespaces: ['projects/vector-filter/home'], include_descendants: true, tags: ['linux', 'unraid'], type: 'decision' };
+    const scope = { namespaces: ['projects/vector-filter/home'], include_descendants: true,
+      tags: ['linux', 'unraid'], device_tags: ['desk-a', 'LAPTOP-B'], type: 'decision' };
     const hits = await search.search({ ...scope, query: 'nonlexical-needle-928104' });
     assert.equal(hits.degraded, false); assert.deepEqual(hits.memories.map(m => m.id), [target.id]);
-    for (const override of [{ include_descendants: false }, { tags: ['linux', 'missing'] }, { type: 'fact' }]) {
+    for (const override of [{ include_descendants: false }, { tags: ['linux', 'missing'] }, { device_tags: ['missing'] }, { type: 'fact' }]) {
       assert.equal((await search.search({ ...scope, ...override, query: 'nonlexical-needle-928104' })).memories.length, 0);
     }
     // 模拟索引 payload 与当前数据库不一致；返回前必须再次检查范围。
-    await pool.query("UPDATE memories SET namespace='projects/elsewhere' WHERE id=$1", [target.id]);
+    await pool.query("UPDATE memories SET device_tags='{}' WHERE id=$1", [target.id]);
+    assert.equal((await search.search({ ...scope, query: 'nonlexical-needle-928104' })).memories.length, 0);
+    await pool.query("UPDATE memories SET device_tags=$2,namespace='projects/elsewhere' WHERE id=$1", [target.id, target.device_tags]);
     assert.equal((await search.search({ ...scope, query: 'nonlexical-needle-928104' })).memories.length, 0);
   } finally {
     await pool.query('UPDATE index_generations SET active=false WHERE name=$1', [name]);

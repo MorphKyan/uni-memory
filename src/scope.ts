@@ -3,22 +3,26 @@ import { z } from 'zod';
 export const namespaceSchema = z.string().min(1).max(160)
   .regex(/^[a-z0-9][a-z0-9_-]*(\/[a-z0-9][a-z0-9_-]*)*$/);
 export const memoryType = z.enum(['preference', 'fact', 'decision', 'status']);
+export const deviceTags = z.array(z.string().trim().min(1).max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/).toLowerCase()).max(20);
 export const scopeShape = {
   namespaces: z.array(namespaceSchema).min(1).max(20),
   include_descendants: z.boolean().default(false),
   tags: z.array(z.string().trim().min(1).max(64)).max(20).default([]),
+  device_tags: deviceTags.default([]),
   type: memoryType.optional(),
 };
 export const scopeSchema = z.object(scopeShape).strict();
 export type MemoryScope = z.output<typeof scopeSchema>;
 
 export function scopeSql(scope: MemoryScope, start: number) {
-  const [ns, descendants, tags, type] = Array.from({ length: 4 }, (_, i) => `$${start + i}`);
+  const [ns, descendants, tags, type, devices] = Array.from({ length: 5 }, (_, i) => `$${start + i}`);
   return {
     sql: `(namespace=ANY(${ns}::text[]) OR (${descendants}::boolean AND EXISTS (
       SELECT 1 FROM unnest(${ns}::text[]) AS scopes(parent)
       WHERE left(namespace,length(parent)+1)=parent||'/')))
-      AND tags @> ${tags}::text[] AND (${type}::text IS NULL OR type=${type})`,
-    values: [scope.namespaces, scope.include_descendants, scope.tags, scope.type ?? null],
+      AND tags @> ${tags}::text[] AND (${type}::text IS NULL OR type=${type})
+      AND device_tags @> ${devices}::text[]`,
+    values: [scope.namespaces, scope.include_descendants, scope.tags, scope.type ?? null, scope.device_tags],
   };
 }

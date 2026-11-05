@@ -43,7 +43,7 @@ export function createMcpServer(store: Store, search: Search, status: MemoryStat
     return search.search(input, metrics.search_timings_ms);
   });
   tool('memory_get', '按 id，或 namespace+key 获取当前有效事实和来源；更新前读取版本。', memorySelector, 'memory:read', input => store.get(input));
-  tool('memory_write', '遵循 Shared Memory Policy v1：只写入值得跨会话长期保存的稳定事实、长期偏好、明确决策和有持续价值的项目状态。写入前判断未来会话是否仍会用到，且有用户明确陈述或可靠来源支持。临时故障、连接失败、单次执行结果、排查猜测、短暂进度、闲聊和重复内容留在当前会话；用户明确要求保存的内容遵循其要求。写前搜索去重；指定 namespace/key/type；明确变化按 expected_version 更新；不确定冲突保留双方及来源。提交完整属性和最少来源，每个新操作使用唯一 idempotency_key；不存凭据、完整聊天或用户要求不保存的内容。', writeSchema, 'memory:write',
+  tool('memory_write', '遵循 Shared Memory Policy v1：只写入值得跨会话长期保存的稳定事实、长期偏好、明确决策和有持续价值的项目状态。写入前判断未来会话是否仍会用到，且有用户明确陈述或可靠来源支持。临时故障、连接失败、单次执行结果、排查猜测、短暂进度、闲聊和重复内容留在当前会话；用户明确要求保存的内容遵循其要求。写前搜索去重；指定 namespace/key/type；明确变化按 expected_version 更新；不确定冲突保留双方及来源。device_tags 可关联多个计算机名。记忆正文和来源只使用相对文件路径或相对位置。提交完整属性和最少来源，每个新操作使用唯一 idempotency_key；不存凭据、完整聊天或用户要求不保存的内容。', writeSchema, 'memory:write',
     (input, metrics) => store.write(identity.clientId, input, () => { metrics.idempotent_replay = true; }));
   tool('memory_history', '按 id 或 namespace+key 查看尚未删除记忆的变更历史和来源。', memorySelector, 'memory:read', input => store.history(input));
   tool('memory_delete', '删除事实及其历史、来源，不能撤销；需当前版本和幂等键。', deleteSchema, 'memory:write',
@@ -51,6 +51,6 @@ export function createMcpServer(store: Store, search: Search, status: MemoryStat
   tool('memory_context', '指定 namespaces 读取分区总览及其他置顶且当前有效的背景记忆，优先返回 key=overview 的总览；总览由客户端创建和按版本维护，不自动生成摘要。', scopeSchema, 'memory:read', input => store.core(input));
   tool('memory_namespaces', '发现包含当前有效记忆的分区及直属条目数；可用 parent 限定自身及子分区，无需预先知道分区名。分区不隔离读取权限。', namespacesSchema, 'memory:read', input => store.namespaces(input));
   tool('memory_list', '指定 namespaces 分页浏览全部当前有效记忆，不需要搜索词；支持子分区、标签、类型过滤。按创建时间和 ID 升序，使用 next_cursor 继续翻页并保持过滤条件不变；next_cursor=null 表示结束。返回当前正文与属性，来源和历史按需另查；不是快照导出。', listSchema, 'memory:read', input => store.list(input));
-  tool('memory_status', '指定 namespaces 查询有效、置顶、过期记忆数量与最近更新时间；沿用子分区、标签、类型过滤。运行状态反映整个实例：数据库、Qdrant、模型、索引任务和检索模式。查询不触发模型加载或推理；状态是采样和最近观测，不保证下一次检索成功。', scopeSchema, 'memory:read', input => status.get(input));
+  tool('memory_status', '指定 namespaces 查询有效、置顶、过期记忆数量与最近更新时间；沿用子分区、普通标签、设备标签和类型过滤。运行状态反映整个实例：数据库、Qdrant、模型、索引任务和检索模式。查询不触发模型加载或推理；状态是采样和最近观测，不保证下一次检索成功。', scopeSchema, 'memory:read', input => status.get(input));
   return server;
 }

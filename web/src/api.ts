@@ -6,6 +6,7 @@ export interface Memory {
   type: 'fact' | 'preference' | 'decision' | 'status';
 
   tags: string[];
+  device_tags: string[];
   pinned: boolean;
   expires_at: string | null;
   version: number;

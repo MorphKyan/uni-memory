@@ -56,6 +56,7 @@ const pages = {
 };
 const query = ref(''),
   tagFilter = ref(''),
+  deviceFilter = ref(''),
   typeFilter = ref(''),
   descendants = ref(false);
 const memories = ref<Memory[]>([]),
@@ -75,6 +76,7 @@ const blank = () => ({
   content: '',
   type: 'fact' as Memory['type'],
   tags: '',
+  device_tags: '',
   pinned: false,
   expires: '',
   reference: 'web:manual',
@@ -214,6 +216,9 @@ async function initialize() {
   await refreshNamespaces();
   await reload();
 }
+function splitTags(value: string) {
+  return value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean);
+}
 function scope() {
   const names = namespace.value ? [namespace.value] : namespaces.value.map((item) => item.namespace);
   if (names.length > 20) throw new Error('too_many_namespaces');
@@ -221,10 +226,8 @@ function scope() {
     namespaces: names.length ? names : ['global'],
     include_descendants: namespace.value ? descendants.value : false,
     ...(typeFilter.value ? { type: typeFilter.value } : {}),
-    tags: tagFilter.value
-      .split(/[,，]/)
-      .map((s) => s.trim())
-      .filter(Boolean),
+    tags: splitTags(tagFilter.value),
+    device_tags: splitTags(deviceFilter.value),
   };
 }
 async function loadList(more = false) {
@@ -281,6 +284,7 @@ async function loadStatus() {
       params = new URLSearchParams();
     filter.namespaces.forEach((value) => params.append('namespaces', value));
     filter.tags.forEach((value) => params.append('tags', value));
+    filter.device_tags.forEach((value) => params.append('device_tags', value));
     params.set('include_descendants', String(filter.include_descendants));
     if (filter.type) params.set('type', filter.type);
     const result = await request<Status>(`/v1/status?${params}`);
@@ -323,6 +327,7 @@ async function navigate(nextSection: Section, nextNamespace = '') {
   tasks.value = [];
   query.value = '';
   tagFilter.value = '';
+  deviceFilter.value = '';
   typeFilter.value = '';
   descendants.value = false;
   memories.value = [];
@@ -380,6 +385,7 @@ function edit(isNew = false) {
         content: record.content,
         type: record.type,
         tags: record.tags.join(', '),
+        device_tags: record.device_tags.join(', '),
         pinned: record.pinned,
         expires: localDate(record.expires_at),
         reference: 'web:manual',
@@ -415,10 +421,8 @@ async function save() {
     key: value.key.trim(),
     content: value.content,
     type: value.type,
-    tags: value.tags
-      .split(/[,，]/)
-      .map((s) => s.trim())
-      .filter(Boolean),
+    tags: splitTags(value.tags),
+    device_tags: splitTags(value.device_tags),
     pinned: value.key.trim() === 'overview' || value.pinned,
     expires_at: expires,
     source: { reference: value.reference, excerpt: value.excerpt },
@@ -617,6 +621,12 @@ onUnmounted(() => {
               aria-label="筛选标签"
               placeholder="标签，用逗号分隔"
               @change="loadList()"
+            /><input
+              v-model="deviceFilter"
+              class="tag-filter"
+              aria-label="筛选设备标签"
+              placeholder="计算机名，用逗号分隔"
+              @change="loadList()"
             /><label v-if="namespace" class="check"
               ><input v-model="descendants" type="checkbox" @change="loadList()" />包含子分区</label
             ><span class="filter-hint">{{
@@ -633,7 +643,7 @@ onUnmounted(() => {
               <div class="empty-symbol">◇</div>
               <h3>
                 {{
-                  query || typeFilter || tagFilter ? '没有匹配的记忆' : '这里还没有记忆'
+                  query || typeFilter || tagFilter || deviceFilter ? '没有匹配的记忆' : '这里还没有记忆'
                 }}
               </h3>
               <p>调整筛选条件，或新建一条值得保存的事实。</p>
@@ -724,7 +734,7 @@ onUnmounted(() => {
                       required
                       maxlength="4000"
                       rows="8"
-                      placeholder="记录明确、稳定且有长期价值的信息。"
+                      placeholder="记录稳定、有长期价值的信息。文件位置请用相对路径或相对位置描述。"
                     ></textarea
                     ><span class="small muted character-count">{{ form.content.length }} / 4000</span></label
                   >
@@ -735,8 +745,9 @@ onUnmounted(() => {
                       </select></label
                     >
                   </div>
-                  <label>标签<input v-model="form.tags" placeholder="用逗号分隔，最多 20 个" /></label
-                  ><label
+                  <label>标签<input v-model="form.tags" placeholder="用逗号分隔，最多 20 个" /></label>
+                  <label>设备标签<input v-model="form.device_tags" placeholder="填写关联的计算机名，用逗号分隔" /></label>
+                  <label
                     >有效期<input
                       v-model="form.expires"
                       type="datetime-local"
@@ -806,6 +817,8 @@ onUnmounted(() => {
                       <dd>{{ timestamp(selected.updated_at) }}</dd>
                       <dt>有效期至</dt>
                       <dd>{{ selected.expires_at ? timestamp(selected.expires_at) : '长期有效' }}</dd>
+                      <dt>设备标签</dt>
+                      <dd>{{ selected.device_tags.join('、') || '—' }}</dd>
                       <dt>记忆 ID</dt>
                       <dd class="mono">{{ selected.id }}</dd>
                     </dl>
@@ -834,6 +847,7 @@ onUnmounted(() => {
                               namespace: event.snapshot.namespace,
                               key: event.snapshot.key,
                               tags: event.snapshot.tags,
+                              device_tags: event.snapshot.device_tags,
                               pinned: event.snapshot.pinned,
                               expires_at: event.snapshot.expires_at,
                               sources: event.snapshot.sources,

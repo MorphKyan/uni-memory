@@ -30,6 +30,7 @@ MCP 使用无状态 Streamable HTTP，`POST /mcp` 返回 JSON；未启用独立 
   "type": "preference",
   "content": "用户偏好简体中文交流。",
   "tags": ["preference"],
+  "device_tags": ["desk-a", "laptop-b"],
   "pinned": true,
   "expires_at": null,
   "source": {"reference": "conversation:synthetic-example", "excerpt": "请用中文回复"},
@@ -44,6 +45,8 @@ type 只能为 `preference`、`fact`、`decision`、`status`。只保存有长�
 `key` 在写入、读取和历史查询时统一进行 NFKC 规范化并去除首尾空白，规范化后须为 1–160 字符；例如 `ｓｅｒｖｅｒ.①` 与 `server.1` 指向同一 key。正文最多 4000 字符，标签最多 20 个，每个 64 字符。来源引用及摘录各最多 512 字符。示例均为合成内容。不得提交完整私人会话或凭据；明显凭据格式会被拒绝，但正则检查不能识别所有敏感信息。
 
 首次写入返回 `{status:"created",memory:...}`；相同 namespace/key、正文及属性合并来源，返回 merged；不同内容或属性且没有 `expected_version` 返回 conflict。纠正或调整类型、标签、置顶、有效期时，先读取当前事实，提交完整新值并加 `expected_version`。未给出的 tags/pinned/expires_at 使用空数组/false/null，写入是完整状态而非 PATCH。改变 namespace/key 会指向另一条事实，不是移动操作；写前应跨 global 与当前项目分区去重。
+
+`device_tags` 保存最多 20 个计算机名。每个名称最长 64 字符，以英文字母或数字开头，可含字母、数字、点、连字符和下划线。服务统一转小写并去重。新建时省略得到空数组，更新时省略则保留原值。传入数组会替换设备列表，传入 `[]` 清空。只记录相对文件路径或相对位置，正文和来源均适用。
 
 REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果；两者都不会覆盖现有事实。每个新操作更换幂等键，网络重试沿用原键。相同客户端、相同键、相同请求返回原结果；同键不同请求返回 idempotency_key_reused。来源身份按调用客户端登记。删除后，旧写入请求的重放只返回 deleted 标识，不恢复正文。
 
@@ -67,7 +70,7 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 
 可传 `{ "parent": "projects" }`，只返回该分区自身及按路径边界匹配的子分区；`projects/home` 不包含 `projects/homelab`。按完整分区名升序返回，count 不累计子分区，包含 overview。分区从 PostgreSQL 当前有效事实汇总，不保留空分区或仅有过期、删除事实的分区，也不虚构没有直属事实的父分区。需要总览时再调用 memory_get。REST 使用 `GET /v1/namespaces?parent=projects`。
 
-`memory_list` 不需要搜索词，不受搜索排名及 core 的 50 条总上限限制；沿用 namespaces/include_descendants/tags/type 过滤。namespaces 必填，默认每页 50 条，limit 为 1–100：
+`memory_list` 不需要搜索词，不受搜索排名及 core 的 50 条总上限限制；沿用 namespaces/include_descendants/tags/device_tags/type 过滤。namespaces 必填，默认每页 50 条，limit 为 1–100：
 
 ```json
 {
@@ -98,15 +101,15 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 }
 ```
 
-`namespaces` 必填，1–20 个分区取并集；默认仅精确匹配，`include_descendants:true` 同时包含指定分区及其子分区。`projects/home` 不包含 `projects/homelab`。未提供 type 时不按类型过滤。limit 为 1–50，tags 采用全部包含过滤。
+`namespaces` 必填，1–20 个分区取并集；默认仅精确匹配，`include_descendants:true` 同时包含指定分区及其子分区。`projects/home` 不包含 `projects/homelab`。未提供 type 时不按类型过滤。limit 为 1–50，tags 和 device_tags 各自采用全部包含过滤，设备名匹配忽略大小写。
 
 返回 `{memories,degraded,reason}`。关键词检索使用子串及 pg_trgm，和向量排名按 RRF 融合。SQL 与 Qdrant 均在候选截断前执行范围及属性过滤，返回前再回查权威数据库。无模型、模型加载中、推理超时或向量服务失败时返回关键词结果并标记降级。embedding 推理在模型最大上下文处截断，完整正文仍保留供关键词搜索。
 
 所有检索在返回前从 PostgreSQL 核对当前版本、删除状态及有效期；过期事实不能通过 memory_get/search/core 返回，但可显式通过 history 查看。核心记忆是最多 50 条置顶且有效的事实，不是自动生成摘要。
 
-`memory_context` 接受同样的 namespaces/include_descendants/tags/type 条件，不接受 query/limit。REST GET 示例：`/v1/memories/core?namespaces=global&namespaces=projects%2Fhomelab&include_descendants=true`，重复 tags 参数表示多个标签。GET 布尔参数仅接受 true/false。memory_get/history 使用 `{id}` 或 `{namespace,key}`，不接受含糊的单 key。
+`memory_context` 接受同样的 namespaces/include_descendants/tags/device_tags/type 条件，不接受 query/limit。REST GET 示例：`/v1/memories/core?namespaces=global&namespaces=projects%2Fhomelab&include_descendants=true`，重复传递 tags 或 device_tags 参数可指定多个标签。GET 布尔参数仅接受 true/false。memory_get/history 使用 `{id}` 或 `{namespace,key}`，不接受含糊的单 key。
 
-所有分区共用 PostgreSQL 和同一模型的 Qdrant 集合；payload 保存版本、namespace、祖先路径、tags、type，不保存正文或来源。分区用于逻辑组织，不提供客户端权限隔离。
+所有分区共用 PostgreSQL 和同一模型的 Qdrant 集合；payload 保存版本、namespace、祖先路径、tags、device_tags、type，不保存正文或来源。分区用于逻辑组织，不提供客户端权限隔离。
 
 向量范围使用 namespace 精确匹配或祖先路径数组匹配，标签逐个加入 must 条件；数组与 match any 的语义参见 [Qdrant 官方过滤说明](https://qdrant.tech/documentation/search/filtering/)。
 
@@ -114,13 +117,13 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 
 ## 记忆库状态
 
-`memory_status` 提供当前记忆数量和实例运行状态，不记录变化日志、不触发模型加载或推理。需要 `memory:read`，沿用 namespaces/include_descendants/tags/type 过滤，namespaces 必填：
+`memory_status` 提供当前记忆数量和实例运行状态，不记录变化日志、不触发模型加载或推理。需要 `memory:read`，沿用 namespaces/include_descendants/tags/device_tags/type 过滤，namespaces 必填：
 
 ```json
 {"namespaces":["global","projects/github_com/morphkyan/uni-memory"],"include_descendants":false}
 ```
 
-REST 使用 `GET /v1/status?namespaces=global&namespaces=projects%2Funi-memory&include_descendants=false`，参数转换与 core 相同，布尔值仅接受 true/false；重复 tags 参数表示多个标签。成功查询返回 HTTP 200，总体运行状况由响应的 status 表达，保留 `/healthz` 与 `/readyz` 原有语义。
+REST 使用 `GET /v1/status?namespaces=global&namespaces=projects%2Funi-memory&include_descendants=false`，参数转换与 core 相同，布尔值仅接受 true/false；重复传递 tags 或 device_tags 参数可指定多个标签。成功查询返回 HTTP 200，总体运行状况由响应的 status 表达，保留 `/healthz` 与 `/readyz` 原有语义。
 
 | 字段 | 含义 |
 | --- | --- |

@@ -31,6 +31,12 @@ interface Summary {
 const days = ref('1'), channel = ref(''), outcome = ref(''), client = ref('');
 const entries = ref<Entry[]>([]), next = ref<string | null>(null), summary = ref<Summary | null>(null);
 const loading = ref(false);
+const detail = ref<Entry | null>(null);
+const dialog = ref<HTMLDialogElement | null>(null);
+function openDetail(entry: Entry) {
+  detail.value = entry;
+  dialog.value?.showModal();
+}
 const detailLabels: Record<string, string> = {
   http_version: 'HTTP 版本', protocol: '连接协议', mcp_version: 'MCP 版本', auth: '鉴权方式',
   request_bytes: '请求声明字节数', response_bytes: '响应声明字节数', error: '错误码',
@@ -193,25 +199,27 @@ onUnmounted(() => active?.abort());
                 {{ outcomeLabels[item.outcome] }}{{ item.status ? ` · ${item.status}` : '' }}
               </span></td>
               <td>{{ item.duration_ms }} ms</td>
-              <td>
-                <details>
-                  <summary>展开</summary>
-                  <dl class="audit-details">
-                    <dt>请求 ID</dt><dd>{{ item.request_id }}</dd>
-                    <template v-if="item.token_id"><dt>凭据 ID</dt><dd>{{ item.token_id }}</dd></template>
-                    <template v-for="(value, key) in item.details" :key="key">
-                      <template v-if="key !== 'source_ip' && value != null && describe(value, key) && describe(value, key) !== '{}'">
-                        <dt>{{ detailLabels[key] ?? key }}</dt><dd>{{ describe(value, key) }}</dd>
-                      </template>
-                    </template>
-                  </dl>
-                </details>
-              </td>
+              <td><button type="button" @click="openDetail(item)">查看详情</button></td>
             </tr>
           </tbody>
         </table>
       </div>
       <button v-if="next" class="load-more" :disabled="loading" @click="load(true)">{{ loading ? '读取中…' : '加载更早的记录' }}</button>
     </section>
+    <dialog ref="dialog" class="audit-dialog" aria-labelledby="audit-dialog-title" @close="detail = null">
+      <div class="section-toolbar">
+        <h2 id="audit-dialog-title">请求详情</h2>
+        <form method="dialog"><button autofocus>关闭</button></form>
+      </div>
+      <dl v-if="detail" class="audit-details">
+        <dt>请求 ID</dt><dd>{{ detail.request_id }}</dd>
+        <template v-if="detail.token_id"><dt>凭据 ID</dt><dd>{{ detail.token_id }}</dd></template>
+        <template v-for="(value, key) in detail.details" :key="key">
+          <template v-if="value != null && describe(value, key) && describe(value, key) !== '{}'">
+            <dt>{{ key === 'source_ip' ? '来源 IP' : (detailLabels[key] ?? key) }}</dt><dd>{{ describe(value, key) }}</dd>
+          </template>
+        </template>
+      </dl>
+    </dialog>
   </div>
 </template>

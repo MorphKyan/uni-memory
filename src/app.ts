@@ -82,6 +82,7 @@ export function createApp(services: Services) {
     const input = { ...req.query };
     if (typeof input.namespaces === 'string') input.namespaces = [input.namespaces];
     if (typeof input.tags === 'string') input.tags = [input.tags];
+    if (typeof input.device_tags === 'string') input.device_tags = [input.device_tags];
     // GET 参数仅接受明确的 true/false，不将字符串 "false" 转成 true。
     return { ...input, ...(input.include_descendants === 'true' ? { include_descendants: true }
       : input.include_descendants === 'false' ? { include_descendants: false } : {}) };

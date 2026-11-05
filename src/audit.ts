@@ -90,6 +90,7 @@ function describeInput(value: unknown) {
   return {
     namespace_count: Array.isArray(input.namespaces) ? input.namespaces.length : typeof input.namespaces === 'string' ? 1 : undefined,
     tag_count: Array.isArray(input.tags) ? input.tags.length : typeof input.tags === 'string' ? 1 : undefined,
+    device_tag_count: Array.isArray(input.device_tags) ? input.device_tags.length : typeof input.device_tags === 'string' ? 1 : undefined,
     include_descendants: [true, false, 'true', 'false'].includes(input.include_descendants as boolean | string)
       ? String(input.include_descendants) === 'true' : undefined,
     memory_type: type.success ? type.data : undefined,

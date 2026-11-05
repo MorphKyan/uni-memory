@@ -14,7 +14,7 @@ description: 使用 uni_memory MCP 检索和维护跨客户端长期记忆；适
 - 项目讨论优先查 global 与当前项目分区。memory_context、memory_search 必须指定 namespaces；需要子分区时显式 include_descendants=true。
 - `memory_context` 和 `memory_search` 必须指定 `namespaces`。默认精确匹配，需要子分区时显式传 `include_descendants: true`；`projects/home` 不包含 `projects/homelab`。
 - 按问题选择多组关键词和语义查询，必要时换同义词、中英文或设备名。根据结果是否补足事实决定是否继续，不机械重复查询。
-- 多个分区取并集；`tags` 过滤要求全部包含。可选 `type` 过滤。
+- 多个分区取并集。`tags` 和 `device_tags` 过滤各自要求全部包含。可选 `type` 过滤。
 
 ## 分区总览
 
@@ -28,6 +28,8 @@ description: 使用 uni_memory MCP 检索和维护跨客户端长期记忆；适
 - 只写入值得跨会话长期保存的稳定事实、长期偏好、明确决策和有持续价值的项目状态。写入前判断未来会话是否仍会用到，且有用户明确陈述或可靠来源支持。临时故障、连接失败、单次执行结果、排查猜测、短暂进度、闲聊和重复内容留在当前会话；用户明确要求保存的内容遵循其要求。
 - 区分用户明确陈述、模型推测和引用内容。有长期价值的引用必须写明来源和归属，不转换为用户已确认事实。
 - `namespace` 表示范围，`key` 是范围内稳定主题标识，`tags` 支持交叉主题。`type` 只能为 `preference`、`fact`、`decision`、`status`。
+- device_tags 保存相关设备的计算机名。同一条记忆可关联多台设备，共同开发时在原条目维护所有已确认的设备名。
+- 记忆正文、来源引用和摘录中禁止记录绝对文件路径。使用以项目为基准的相对路径，或描述相对位置，例如“与本项目平级的目录中有 BlaBla 项目”。
 - 不保存密钥、密码、令牌、完整聊天或用户要求不保存的内容。来源只写最少必要的短引用。
 
 ## 更新
@@ -35,6 +37,7 @@ description: 使用 uni_memory MCP 检索和维护跨客户端长期记忆；适
 - 写入前搜索相关记忆，项目讨论同时检查 `global` 与对应项目分区。相同事实复用原 `namespace/key`，不为分区更整齐而另建重复条目。
 - 明确变化时先 `memory_get` 读取当前版本与来源，再以 `expected_version` 更新原条目。按 ID 读取，或同时提供 `namespace` 和 `key`。
 - 写入是完整状态，不是 PATCH：保留需要的 `tags`、`pinned`、`expires_at`；必须显式提供 `namespace`、`type`。保留稳定 key。
+- 修改 `device_tags` 时提交完整设备名列表，空数组清除关联，省略则保留已有设备。
 - 不确定冲突时在正文保留双方信息及各自归属，追加必要来源。合并进原条目也必须检查版本，不能擅自选择一方覆盖。原来源和历史由服务保留。
 - 并发返回 `status: conflict` 时重新读取、核实，不仅替换版本号再次覆盖；确认冲突解决后按当前版本更新正文。
 - 每个新操作使用唯一 `idempotency_key`；同一操作因网络问题重试沿用原键。
