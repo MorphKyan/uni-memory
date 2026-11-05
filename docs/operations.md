@@ -6,6 +6,8 @@ Docker Compose 运行应用、PostgreSQL 和 Qdrant。初始化生成 `.env` 和
 
 反向代理部署时，`PUBLIC_URL` 使用实际 HTTPS 入口。`TRUST_PROXY` 只包含可信代理地址或网段，代理应保留 `Host` 和 `Authorization`，并传递原始协议。修改环境变量后重新创建应用容器。
 
+审计来源 IP 与限流共用 Express 的代理信任配置。应用应只接受来自预期代理的回源连接。可由最后一层可信代理校验并覆盖 `X-Forwarded-For`，此时应用只需信任最后一层代理。若保留完整转发链，应用需要信任链中实际受控的代理地址或网段，并确保各层处理转发头时不会让访客伪造来源。未配置 `TRUST_PROXY` 时，来源 IP 是与应用直接建立连接的一跳。
+
 ## 模型与索引
 
 默认使用 EmbeddingGemma 2 文本版 Q4，向量为 768 维。配置由 `EMBEDDING_MODEL` 和 `EMBEDDING_DTYPE` 控制。未启用模型时，检索使用关键词，索引写入任务等待，索引删除继续执行。

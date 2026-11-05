@@ -84,13 +84,15 @@ export class Store {
     const scope = scopeSql(scopeSchema.parse(input), 1);
     return (await this.pool.query<Memory>(`SELECT * FROM memories WHERE pinned AND ${visible} AND ${scope.sql} ORDER BY (key='overview') DESC, updated_at DESC, id LIMIT 50`, scope.values)).rows;
   }
-  private async idempotent(actor: string, key: string, request: unknown, run: (client: PoolClient) => Promise<Record<string, unknown>>) {
+  private async idempotent(actor: string, key: string, request: unknown, onReplay: (() => void) | undefined,
+    run: (client: PoolClient) => Promise<Record<string, unknown>>) {
     const hash = createHash('sha256').update(JSON.stringify(request)).digest('hex');
     return transaction(this.pool, async client => {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`idem:${actor}:${key}`]);
       const prior = (await client.query('SELECT request_hash, result FROM idempotency WHERE client_id=$1 AND key=$2', [actor, key])).rows[0];
       if (prior) {
         if (prior.request_hash !== hash) throw new AppError(409, 'idempotency_key_reused');
+        onReplay?.();
         return prior.result as Record<string, unknown>;
       }
       const result = await run(client);
@@ -100,13 +102,13 @@ export class Store {
       return result;
     });
   }
-  async write(actor: string, input: unknown) {
+  async write(actor: string, input: unknown, onReplay?: () => void) {
     const data = writeSchema.parse(input);
     if (data.key === 'overview') data.pinned = true;
     data.content = data.content.normalize('NFC');
     data.tags = [...new Set(data.tags)].sort();
     rejectSecrets(data);
-    return this.idempotent(actor, data.idempotency_key, { operation: 'write', ...data }, async client => {
+    return this.idempotent(actor, data.idempotency_key, { operation: 'write', ...data }, onReplay, async client => {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify(['memory', data.namespace, data.key])]);
       const old = (await client.query<Memory>('SELECT * FROM memories WHERE namespace=$1 AND key=$2 FOR UPDATE', [data.namespace, data.key])).rows[0];
       let memory: Memory;
@@ -143,9 +145,9 @@ export class Store {
       return { status, memory: result };
     });
   }
-  async delete(actor: string, input: unknown) {
+  async delete(actor: string, input: unknown, onReplay?: () => void) {
     const data = deleteSchema.parse(input);
-    return this.idempotent(actor, data.idempotency_key, { operation: 'delete', ...data }, async client => {
+    return this.idempotent(actor, data.idempotency_key, { operation: 'delete', ...data }, onReplay, async client => {
       const memory = (await client.query<Memory>('SELECT * FROM memories WHERE id=$1 FOR UPDATE', [data.id])).rows[0];
       if (!memory || memory.deleted_at) throw new AppError(404, 'memory_not_found');
       if (memory.version !== data.expected_version) return { status: 'conflict', memory };

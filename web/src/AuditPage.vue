@@ -37,7 +37,12 @@ const detailLabels: Record<string, string> = {
   target_token_id: '管理操作目标令牌', target_client_id: '目标客户端', target_scopes: '操作后的权限',
   target_expires_at: '操作后的到期时间', target_version: '操作后的配置版本', input: '查询与请求参数概况',
   rpc_batch: '批量 MCP 调用', rpc_batch_size: '批量调用数量',
+  memory_id: '目标记忆 ID', mutation_result: '变更结果', memory_version: '返回的记忆版本',
+  idempotent_replay: '幂等重试', returned_count: '返回条数', source_count: '返回来源条数', has_more: '还有下一页',
+  search_degraded: '检索降级', search_timings_ms: '检索分段耗时', tool_duration_ms: 'MCP 工具耗时',
 };
+const mutationLabels: Record<string, string> = { created: '新建', updated: '更新', merged: '合并', deleted: '删除', conflict: '版本冲突' };
+const searchStageLabels: Record<string, string> = { postgresql: 'PostgreSQL', embedding: 'Embedding', qdrant: 'Qdrant' };
 let applied = new URLSearchParams();
 let active: AbortController | undefined;
 
@@ -65,7 +70,13 @@ const trend = computed(() => {
 const peak = computed(() => Math.max(1, ...trend.value.map(item => item.count)));
 const width = computed(() => 720 / Math.max(1, trend.value.length));
 const axis = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-function describe(value: unknown) {
+function describe(value: unknown, key?: string) {
+  if (key === 'mutation_result' && typeof value === 'string') return mutationLabels[value] ?? value;
+  if (key === 'tool_duration_ms') return `${value} ms`;
+  if (key === 'search_timings_ms' && value && typeof value === 'object') {
+    return Object.entries(value).map(([stage, ms]) => `${searchStageLabels[stage] ?? stage} ${ms} ms`).join(' · ');
+  }
+  if (typeof value === 'boolean') return value ? '是' : '否';
   return typeof value === 'object' ? JSON.stringify(value) : String(value);
 }
 async function load(more = false) {
@@ -169,7 +180,7 @@ onUnmounted(() => active?.abort());
       <p v-if="!entries.length" class="muted" role="status">{{ loading ? '正在读取审计记录…' : '暂无匹配记录。' }}</p>
       <div v-else class="table-scroll">
         <table class="management-table audit-table">
-          <thead><tr><th>时间</th><th>请求</th><th>客户端</th><th>结果</th><th>耗时</th><th>详情</th></tr></thead>
+          <thead><tr><th>时间</th><th>请求</th><th>客户端</th><th>来源 IP</th><th>结果</th><th>耗时</th><th>详情</th></tr></thead>
           <tbody>
             <tr v-for="item in entries" :key="item.id">
               <td>{{ timestamp(item.started_at) }}</td>
@@ -177,6 +188,7 @@ onUnmounted(() => active?.abort());
                 <div v-if="item.rpc_method" class="muted">{{ item.rpc_method }}{{ item.tool ? ` · ${item.tool}` : '' }}</div>
               </td>
               <td>{{ item.client_id ?? '—' }}</td>
+              <td class="mono">{{ item.details.source_ip ?? '—' }}</td>
               <td><span class="badge" :class="{ 'badge-accent': item.outcome === 'success', 'badge-error': item.outcome === 'error' }">
                 {{ outcomeLabels[item.outcome] }}{{ item.status ? ` · ${item.status}` : '' }}
               </span></td>
@@ -188,7 +200,9 @@ onUnmounted(() => active?.abort());
                     <dt>请求 ID</dt><dd>{{ item.request_id }}</dd>
                     <template v-if="item.token_id"><dt>凭据 ID</dt><dd>{{ item.token_id }}</dd></template>
                     <template v-for="(value, key) in item.details" :key="key">
-                      <template v-if="value != null && describe(value) !== '{}'"><dt>{{ detailLabels[key] ?? key }}</dt><dd>{{ describe(value) }}</dd></template>
+                      <template v-if="key !== 'source_ip' && value != null && describe(value, key) && describe(value, key) !== '{}'">
+                        <dt>{{ detailLabels[key] ?? key }}</dt><dd>{{ describe(value, key) }}</dd>
+                      </template>
                     </template>
                   </dl>
                 </details>

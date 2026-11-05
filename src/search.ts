@@ -1,4 +1,6 @@
+import { performance } from 'node:perf_hooks';
 import { searchSchema } from './validation.js';
+import type { SearchTimings } from './audit.js';
 import type { Store, Memory } from './store.js';
 import { visible } from './store.js';
 import type { Embedder } from './embedding.js';
@@ -12,33 +14,42 @@ export function fuse(lists: string[][], limit: number) {
 }
 export class Search {
   constructor(private store: Store, private qdrant: Qdrant, private embedder?: Embedder) {}
-  async search(input: unknown) {
+  async search(input: unknown, timings?: SearchTimings) {
+    async function measure<T>(stage: keyof SearchTimings, run: () => Promise<T>) {
+      if (!timings) return run();
+      const started = performance.now();
+      try { return await run(); }
+      finally { timings[stage] = (timings[stage] ?? 0) + performance.now() - started; }
+    }
+
     const data = searchSchema.parse(input);
     const escaped = data.query.replace(/[\\%_]/g, '\\$&');
     const lexicalScope = scopeSql(data, 3);
-    const lexical = (await this.store.pool.query<Pick<Memory, 'id' | 'version'>>(`SELECT id,version FROM memories WHERE ${visible} AND ${lexicalScope.sql}
+    const lexical = (await measure('postgresql', () => this.store.pool.query<Pick<Memory, 'id' | 'version'>>(`SELECT id,version FROM memories WHERE ${visible} AND ${lexicalScope.sql}
       AND (content ILIKE $2 OR key ILIKE $2 OR similarity(content,$1)>0.08)
       ORDER BY (key=$1) DESC,(content ILIKE $2) DESC,similarity(content,$1) DESC,updated_at DESC LIMIT 100`,
-    [data.query, `%${escaped}%`, ...lexicalScope.values])).rows;
+    [data.query, `%${escaped}%`, ...lexicalScope.values]))).rows;
     let degraded = !this.embedder;
     let reason: string | null = this.embedder ? null : 'embedding_not_configured';
     let vectorHits: { id: string; payload: { version: number } }[] = [];
-    if (this.embedder) {
+    const embedder = this.embedder;
+    if (embedder) {
       try {
-        const generation = (await this.store.pool.query('SELECT name,model,dtype FROM index_generations WHERE active')).rows[0];
-        if (!generation || generation.model !== this.embedder.model || generation.dtype !== this.embedder.dtype) throw new Error('index_not_ready');
+        const generation = (await measure('postgresql', () => this.store.pool.query('SELECT name,model,dtype FROM index_generations WHERE active'))).rows[0];
+        if (!generation || generation.model !== embedder.model || generation.dtype !== embedder.dtype) throw new Error('index_not_ready');
         let timer: NodeJS.Timeout | undefined;
-        const vectors = await Promise.race([
-          this.embedder.embed([data.query], true),
+        const vectors = await measure('embedding', () => Promise.race([
+          embedder.embed([data.query], true),
           new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('vector_timeout')), 5000); }),
-        ]).finally(() => clearTimeout(timer));
-        vectorHits = await this.qdrant.search(generation.name, vectors[0]!, 100, data);
+        ]).finally(() => clearTimeout(timer)));
+        vectorHits = await measure('qdrant', () => this.qdrant.search(generation.name, vectors[0]!, 100, data));
       } catch { degraded = true; reason = 'vector_unavailable'; }
     }
     const candidates = [...new Set([...lexical.map(row => row.id), ...vectorHits.map(row => row.id)])];
     if (!candidates.length) return { memories: [], degraded, reason };
     const currentScope = scopeSql(data, 2);
-    const current = (await this.store.pool.query<Memory>(`SELECT * FROM memories WHERE id=ANY($1::uuid[]) AND ${visible} AND ${currentScope.sql}`, [candidates, ...currentScope.values])).rows;
+    const current = (await measure('postgresql', () => this.store.pool.query<Memory>(
+      `SELECT * FROM memories WHERE id=ANY($1::uuid[]) AND ${visible} AND ${currentScope.sql}`, [candidates, ...currentScope.values]))).rows;
     const byId = new Map(current.map(row => [row.id, row]));
     const vectorIds = vectorHits.filter(hit => byId.get(hit.id)?.version === hit.payload?.version).map(hit => hit.id);
     const ids = fuse([lexical.filter(row => byId.get(row.id)?.version === row.version).map(row => row.id), vectorIds], data.limit);

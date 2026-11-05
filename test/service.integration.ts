@@ -43,7 +43,7 @@ before(async () => {
   server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); assert(address && typeof address !== 'string');
   base = `http://127.0.0.1:${address.port}`;
-  cfg = config({ ...process.env, PUBLIC_URL: base });
+  cfg = config({ ...process.env, PUBLIC_URL: base, TRUST_PROXY: '' });
   qdrant = new Qdrant(cfg);
   await qdrant.request('/collections');
   writer = (await issueToken(pool, 'codex-test', ['memory:read', 'memory:write'])).token;
@@ -148,12 +148,20 @@ test('管理台持久化改密、管理现有 Bearer，并统计 REST 和 MCP �
     const search = report.entries.find((row: { request_id: string }) => row.request_id === requestId);
     assert.equal(search.token_id, existing.id);
     assert.equal(search.details.input.query_length, query.length);
+    assert.equal(search.details.source_ip, '127.0.0.1');
+    assert.equal(search.details.returned_count, 0);
+    assert.equal(search.details.search_degraded, true);
+    assert(search.details.search_timings_ms.postgresql >= 0);
+    assert(search.duration_ms >= search.details.search_timings_ms.postgresql);
     assert(report.entries.some((row: { tool: string; outcome: string }) => row.tool === 'memory_list' && row.outcome === 'success'));
     assert(report.entries.some((row: { tool: string; outcome: string; status: number }) => row.tool === 'memory_write' && row.outcome === 'error' && row.status === 200));
     const batch = report.entries.find((row: { rpc_method: string }) => row.rpc_method === '(batch)');
     assert.equal(batch.outcome, 'error');
     assert.deepEqual(batch.details.rpc_batch.map((item: { tool: string; error?: string }) => [item.tool, item.error]),
       [['memory_context', undefined], ['memory_write', 'insufficient_scope']]);
+    assert.equal(batch.details.rpc_batch[0].returned_count, 0);
+    assert(batch.details.rpc_batch[0].tool_duration_ms >= 0);
+    assert.equal(batch.details.rpc_batch[1].returned_count, undefined);
     assert(report.buckets.some((bucket: { outcome: string; count: number }) => bucket.outcome === 'error' && bucket.count >= 2));
     for (const value of [query, rotation.token, issued.token, '198.51.100.11']) assert(!JSON.stringify(report).includes(value));
     const errors = await (await call(`/ui/audit?client=${client}&channel=mcp&outcome=error`, undefined, session)).json();
@@ -187,6 +195,69 @@ test('管理台持久化改密、管理现有 Bearer，并统计 REST 和 MCP �
   } finally {
     await ui.close();
     await pool.query('DELETE FROM admin_password');
+  }
+});
+
+test('审计关联可信来源、实际记忆变更、幂等重试和分页返回量', async () => {
+  const { token } = await issueToken(pool, 'audit-mutations', ['memory:read', 'memory:write']);
+  const server = createApp({ cfg: { ...cfg, trustProxy: ['loopback', '192.0.2.0/24'] }, store, qdrant, search: new Search(store, qdrant) })
+    .listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address(); assert(address && typeof address !== 'string');
+  const root = `http://127.0.0.1:${address.port}`;
+  async function post(path: string, body: unknown, headers: Record<string, string> = {}) {
+    const response = await fetch(root + path, {
+      method: 'POST', body: JSON.stringify(body), headers: {
+        Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+        'X-Forwarded-For': '203.0.113.99, 198.51.100.11, 192.0.2.10, 192.0.2.20', ...headers,
+      },
+    });
+    const bodyText = await response.text();
+    return { id: response.headers.get('x-request-id'), status: response.status,
+      body: response.headers.get('content-type')?.includes('application/json') ? JSON.parse(bodyText) : undefined };
+  }
+  try {
+    const input = { ...fact(), namespace: 'projects/synthetic-audit', content: 'Synthetic private audit fixture' };
+    const created = await post('/v1/memories', input);
+    assert.equal(created.status, 201);
+    const id = created.body.memory.id;
+    const update = { ...input, expected_version: 1, content: 'Synthetic updated audit fixture', idempotency_key: randomUUID() };
+    const updated = await post('/v1/memories', update);
+    const replay = await post('/v1/memories', update);
+    const list = await post('/v1/memories/list', { namespaces: [input.namespace], limit: 1 });
+    const deleted = await post('/mcp', [
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_delete', arguments: {
+        id, expected_version: 2, idempotency_key: randomUUID(),
+      } } },
+    ], { Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-03-26' });
+    assert.equal(deleted.status, 200);
+    const requests = [created, updated, replay, list, deleted].map(response => response.id);
+    let rows = [];
+    for (let attempt = 0; attempt < 20; attempt++) {
+      rows = (await pool.query('SELECT request_id,details FROM request_audit WHERE request_id=ANY($1::uuid[])', [requests])).rows;
+      if (rows.length === requests.length) break;
+      await delay(25);
+    }
+    assert.equal(rows.length, requests.length);
+    const byId = new Map(rows.map(row => [row.request_id, row.details]));
+    assert(rows.every(row => row.details.source_ip === '198.51.100.11'));
+    assert(!JSON.stringify(rows).includes('203.0.113.99'));
+    assert(!JSON.stringify(rows).includes('Synthetic'));
+    assert(!JSON.stringify(rows).includes(input.key));
+    assert.equal(byId.get(created.id).memory_id, id);
+    assert.equal(byId.get(created.id).mutation_result, 'created');
+    assert.equal(byId.get(updated.id).mutation_result, 'updated');
+    assert.equal(byId.get(updated.id).memory_version, 2);
+    assert.equal(byId.get(updated.id).idempotent_replay, undefined);
+    assert.equal(byId.get(replay.id).idempotent_replay, true);
+    assert.equal(byId.get(list.id).returned_count, 1);
+    assert.equal(byId.get(list.id).has_more, false);
+    const deletion = byId.get(deleted.id).rpc_batch[0];
+    assert.equal(deletion.memory_id, id);
+    assert.equal(deletion.mutation_result, 'deleted');
+    assert.equal(deletion.input.expected_version, 2);
+  } finally {
+    await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
   }
 });
 

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import type { RequestHandler } from 'express';
 import type { Pool } from 'pg';
@@ -22,6 +23,65 @@ const tools = new Set(['memory_search', 'memory_get', 'memory_write', 'memory_hi
   'memory_context', 'memory_namespaces', 'memory_list', 'memory_status']);
 const channels = ['rest', 'mcp', 'oauth', 'admin', 'other'] as const;
 const outcomes = ['success', 'error', 'disconnected'] as const;
+
+export type SearchTimings = Partial<Record<'postgresql' | 'embedding' | 'qdrant', number>>;
+
+export interface MemoryAudit {
+  memory_id?: string;
+  mutation_result?: 'created' | 'updated' | 'merged' | 'deleted' | 'conflict';
+  memory_version?: number;
+  idempotent_replay?: boolean;
+  returned_count?: number;
+  source_count?: number;
+  has_more?: boolean;
+  search_degraded?: boolean;
+  search_timings_ms?: SearchTimings;
+}
+
+export interface ToolAudit extends MemoryAudit {
+  error?: string;
+  tool_duration_ms?: number;
+}
+
+function roundSearchTimings(audit?: MemoryAudit) {
+  if (!audit?.search_timings_ms) return audit;
+  const timings = Object.entries(audit.search_timings_ms).map(([stage, ms]) => [stage, Math.round(ms)]);
+  return { ...audit, search_timings_ms: Object.fromEntries(timings) };
+}
+
+export function summarizeMemoryResult(operation: string, value: unknown): MemoryAudit | undefined {
+  const result = value as {
+    status?: MemoryAudit['mutation_result'];
+    memory?: { id: string; version: number };
+    id?: string;
+    memories?: unknown[];
+    namespaces?: unknown[];
+    sources?: unknown[];
+    next_cursor?: string | null;
+    degraded?: boolean;
+  } | null | undefined;
+  if (!result) return;
+  switch (operation) {
+    case 'memory_write':
+    case 'memory_delete':
+      return {
+        memory_id: result.memory?.id ?? result.id,
+        mutation_result: result.status,
+        memory_version: result.memory?.version,
+      };
+    case 'memory_get':
+      return { returned_count: 1, source_count: result.sources?.length };
+    case 'memory_history':
+    case 'memory_context':
+      return Array.isArray(result) ? { returned_count: result.length } : undefined;
+    case 'memory_search':
+      return { returned_count: result.memories?.length, search_degraded: result.degraded };
+    case 'memory_list':
+      return { returned_count: result.memories?.length, has_more: result.next_cursor != null };
+    case 'memory_namespaces':
+      return { returned_count: result.namespaces?.length };
+  }
+}
 
 function describeInput(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -51,14 +111,15 @@ interface RpcInput {
   method?: unknown;
   params?: { name?: unknown; arguments?: unknown; protocolVersion?: unknown };
 }
-function describeRpc(input: RpcInput | null | undefined, status: number | null, results?: Map<string | number, string | undefined>) {
+function describeRpc(input: RpcInput | null | undefined, status: number | null, results?: Map<string | number, ToolAudit>) {
   const method = typeof input?.method === 'string' ? methods.has(input.method) ? input.method : '(other)' : undefined;
   const name = input?.params?.name;
   const tool = method === 'tools/call' && typeof name === 'string' ? tools.has(name) ? name : '(other)' : undefined;
   const id = input?.id;
-  const error = method === 'tools/call' && id !== undefined
-    ? results?.has(id) ? results.get(id) : status === 200 ? 'tool_rejected' : undefined : undefined;
-  return { method, tool, error, input: tool ? describeInput(input?.params?.arguments) : undefined };
+  const result = method === 'tools/call' && id !== undefined
+    ? results?.get(id) ?? (status === 200 ? { error: 'tool_rejected' } : undefined) : undefined;
+  const { error, ...metrics } = result ?? {};
+  return { method, tool, error, metrics: roundSearchTimings(metrics), input: tool ? describeInput(input?.params?.arguments) : undefined };
 }
 
 export function auditRequests(pool: Pool): RequestHandler {
@@ -81,22 +142,31 @@ export function auditRequests(pool: Pool): RequestHandler {
     const requestId = randomUUID();
     const started = new Date();
     const time = performance.now();
+    const forwardedIp = req.ip;
+    const sourceIp = forwardedIp && isIP(forwardedIp) ? forwardedIp : req.socket.remoteAddress;
     res.setHeader('X-Request-ID', requestId);
 
     async function record(finished: boolean) {
+      const duration = Math.round(performance.now() - time);
+      const status = finished || res.headersSent ? res.statusCode : null;
+      // 连接断开时，已开始的变更仍可能提交。
+      const work = res.locals.auditWork as Promise<unknown> | undefined;
+      if (!finished && work) await work.catch(() => undefined);
       if (pending >= 128) { warn(); return; }
       pending++;
       try {
         const identity = (res.locals.identity ?? res.locals.auditToken) as Identity | undefined;
-        const status = finished || res.headersSent ? res.statusCode : null;
         const body = (route === '/mcp' ? req.body : undefined) as RpcInput | RpcInput[] | undefined;
-        const results = res.locals.auditToolResults as Map<string | number, string | undefined> | undefined;
+        const results = res.locals.auditToolResults as Map<string | number, ToolAudit> | undefined;
         const batch = Array.isArray(body) ? body.slice(0, 100).map(item => describeRpc(item, status, results)) : undefined;
         const rpc = !Array.isArray(body) ? describeRpc(body, status, results) : undefined;
         const error = res.locals.auditError ?? rpc?.error ?? (batch?.some(item => item.error) ? 'batch_tool_failed' : undefined);
         const mcpVersion = req.get('mcp-protocol-version') ?? (!Array.isArray(body) ? body?.params?.protocolVersion : undefined);
         const bearer = res.locals.auditBearer as BearerRecord | undefined;
         const details = {
+          source_ip: sourceIp,
+          ...rpc?.metrics,
+          ...roundSearchTimings(res.locals.auditMemory as MemoryAudit | undefined),
           http_version: req.httpVersion,
           protocol: req.secure ? 'https' : req.protocol === 'http' ? 'http' : undefined,
           mcp_version: route === '/mcp' && typeof mcpVersion === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(mcpVersion) ? mcpVersion : undefined,
@@ -110,14 +180,14 @@ export function auditRequests(pool: Pool): RequestHandler {
           target_scopes: bearer?.scopes,
           target_expires_at: bearer?.expires_at,
           target_version: bearer?.version,
-          rpc_batch: batch,
+          rpc_batch: batch?.map(({ metrics, ...call }) => ({ ...call, ...metrics })),
           rpc_batch_size: Array.isArray(body) ? body.length : undefined,
           input: channel === 'rest' && route !== '(unmatched)' ? describeInput(req.method === 'GET' || req.method === 'HEAD' ? req.query : req.body)
             : rpc?.input,
         };
         await pool.query(`INSERT INTO request_audit(request_id,started_at,channel,route,method,status,duration_ms,client_id,token_id,rpc_method,tool,outcome,details)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-        [requestId, started, channel, route, req.method, status, Math.round(performance.now() - time), identity?.clientId, identity?.tokenId,
+        [requestId, started, channel, route, req.method, status, duration, identity?.clientId, identity?.tokenId,
           batch ? '(batch)' : rpc?.method, rpc?.tool, !finished ? 'disconnected' : (status ?? 0) >= 400 || error ? 'error' : 'success', details]);
       } catch { warn(); }
       finally { pending--; }

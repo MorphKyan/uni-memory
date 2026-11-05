@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { AppError, memorySelector, writeSchema, deleteSchema, searchSchema, namespacesSchema, listSchema } from './validation.js';
@@ -7,34 +8,46 @@ import type { Search } from './search.js';
 import { scopeSchema } from './scope.js';
 import { sharedMemoryPolicy } from './policy.js';
 import type { MemoryStatus } from './status.js';
+import { summarizeMemoryResult, type ToolAudit } from './audit.js';
 
-export function createMcpServer(store: Store, search: Search, status: MemoryStatus, identity: Identity, audit?: (id: string | number, error?: string) => void) {
+export function createMcpServer(store: Store, search: Search, status: MemoryStatus, identity: Identity, audit?: (id: string | number, result: ToolAudit) => void) {
   const server = new McpServer({ name: 'uni-memory', version: '0.3.2' }, {
     instructions: sharedMemoryPolicy,
   });
-  function tool(name: string, description: string, schema: z.ZodType, scope: string, run: (input: unknown) => Promise<unknown>) {
+  function tool(name: string, description: string, schema: z.ZodType, scope: string, run: (input: unknown, metrics: ToolAudit) => Promise<unknown>) {
     server.registerTool(name, {
       description, inputSchema: schema,
       annotations: { readOnlyHint: scope === 'memory:read', destructiveHint: name === 'memory_delete', idempotentHint: true, openWorldHint: false },
       _meta: { securitySchemes: [{ type: 'oauth2', scopes: [scope] }] },
     }, async (input, context) => {
+      const started = performance.now();
+      const metrics: ToolAudit = {};
       try {
         requireScope(identity, scope);
-        const value = await run(input);
-        audit?.(context.mcpReq.id, value && typeof value === 'object' && 'status' in value && value.status === 'conflict' ? 'conflict' : undefined);
+        const value = await run(input, metrics);
+        Object.assign(metrics, summarizeMemoryResult(name, value));
+        if (metrics.mutation_result === 'conflict') metrics.error = 'conflict';
         return { content: [{ type: 'text', text: JSON.stringify(value) }] };
       } catch (error) {
         const code = error instanceof AppError ? error.code : error instanceof z.ZodError ? 'invalid_input' : 'operation_failed';
-        audit?.(context.mcpReq.id, code);
+        metrics.error = code;
         return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: code }) }] };
+      } finally {
+        metrics.tool_duration_ms = Math.round(performance.now() - started);
+        audit?.(context.mcpReq.id, metrics);
       }
     });
   }
-  tool('memory_search', '指定 namespaces 检索当前有效记忆；项目讨论优先 global 与对应项目分区，可显式包含子分区。支持多标签、type 过滤。degraded 表示向量检索不可用。', searchSchema, 'memory:read', input => search.search(input));
+  tool('memory_search', '指定 namespaces 检索当前有效记忆；项目讨论优先 global 与对应项目分区，可显式包含子分区。支持多标签、type 过滤。degraded 表示向量检索不可用。', searchSchema, 'memory:read', (input, metrics) => {
+    metrics.search_timings_ms = {};
+    return search.search(input, metrics.search_timings_ms);
+  });
   tool('memory_get', '按 id，或 namespace+key 获取当前有效事实和来源；更新前读取版本。', memorySelector, 'memory:read', input => store.get(input));
-  tool('memory_write', '遵循 Shared Memory Policy v1：只写入值得跨会话长期保存的稳定事实、长期偏好、明确决策和有持续价值的项目状态。写入前判断未来会话是否仍会用到，且有用户明确陈述或可靠来源支持。临时故障、连接失败、单次执行结果、排查猜测、短暂进度、闲聊和重复内容留在当前会话；用户明确要求保存的内容遵循其要求。写前搜索去重；指定 namespace/key/type；明确变化按 expected_version 更新；不确定冲突保留双方及来源。提交完整属性和最少来源，每个新操作使用唯一 idempotency_key；不存凭据、完整聊天或用户要求不保存的内容。', writeSchema, 'memory:write', input => store.write(identity.clientId, input));
+  tool('memory_write', '遵循 Shared Memory Policy v1：只写入值得跨会话长期保存的稳定事实、长期偏好、明确决策和有持续价值的项目状态。写入前判断未来会话是否仍会用到，且有用户明确陈述或可靠来源支持。临时故障、连接失败、单次执行结果、排查猜测、短暂进度、闲聊和重复内容留在当前会话；用户明确要求保存的内容遵循其要求。写前搜索去重；指定 namespace/key/type；明确变化按 expected_version 更新；不确定冲突保留双方及来源。提交完整属性和最少来源，每个新操作使用唯一 idempotency_key；不存凭据、完整聊天或用户要求不保存的内容。', writeSchema, 'memory:write',
+    (input, metrics) => store.write(identity.clientId, input, () => { metrics.idempotent_replay = true; }));
   tool('memory_history', '按 id 或 namespace+key 查看尚未删除记忆的变更历史和来源。', memorySelector, 'memory:read', input => store.history(input));
-  tool('memory_delete', '删除事实及其历史、来源，不能撤销；需当前版本和幂等键。', deleteSchema, 'memory:write', input => store.delete(identity.clientId, input));
+  tool('memory_delete', '删除事实及其历史、来源，不能撤销；需当前版本和幂等键。', deleteSchema, 'memory:write',
+    (input, metrics) => store.delete(identity.clientId, input, () => { metrics.idempotent_replay = true; }));
   tool('memory_context', '指定 namespaces 读取分区总览及其他置顶且当前有效的背景记忆，优先返回 key=overview 的总览；总览由客户端创建和按版本维护，不自动生成摘要。', scopeSchema, 'memory:read', input => store.core(input));
   tool('memory_namespaces', '发现包含当前有效记忆的分区及直属条目数；可用 parent 限定自身及子分区，无需预先知道分区名。分区不隔离读取权限。', namespacesSchema, 'memory:read', input => store.namespaces(input));
   tool('memory_list', '指定 namespaces 分页浏览全部当前有效记忆，不需要搜索词；支持子分区、标签、类型过滤。按创建时间和 ID 升序，使用 next_cursor 继续翻页并保持过滤条件不变；next_cursor=null 表示结束。返回当前正文与属性，来源和历史按需另查；不是快照导出。', listSchema, 'memory:read', input => store.list(input));

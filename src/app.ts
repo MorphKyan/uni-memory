@@ -15,7 +15,7 @@ import type { Qdrant } from './qdrant.js';
 import type { Embedder } from './embedding.js';
 import { MemoryStatus } from './status.js';
 import { mountAdmin } from './admin.js';
-import { auditRequests } from './audit.js';
+import { auditRequests, summarizeMemoryResult, type MemoryAudit, type ToolAudit } from './audit.js';
 
 interface Services { store: Store; search: Search; qdrant: Qdrant; cfg: Config; provider?: Provider; embedder?: Embedder }
 export function rateLimit(limit: number, windowMs = 60000): RequestHandler {
@@ -86,29 +86,52 @@ export function createApp(services: Services) {
     return { ...input, ...(input.include_descendants === 'true' ? { include_descendants: true }
       : input.include_descendants === 'false' ? { include_descendants: false } : {}) };
   }
-  app.get('/v1/memories/core', scope('memory:read'), async (req, res) => { res.json(await store.core(queryScope(req))); });
+  function memoryRead(operation: string, run: (req: express.Request, audit: MemoryAudit) => Promise<unknown>): RequestHandler {
+    return async (req, res) => {
+      const audit: MemoryAudit = {};
+      res.locals.auditMemory = audit;
+      const result = await run(req, audit);
+      Object.assign(audit, summarizeMemoryResult(operation, result));
+      res.json(result);
+    };
+  }
+  app.get('/v1/memories/core', scope('memory:read'), memoryRead('memory_context', req => store.core(queryScope(req))));
   app.get('/v1/status', scope('memory:read'), async (req, res) => { res.json(await status.get(queryScope(req))); });
-  app.post('/v1/memories/search', scope('memory:read'), async (req, res) => { res.json(await search.search(req.body)); });
-  app.get('/v1/namespaces', scope('memory:read'), async (req, res) => { res.json(await store.namespaces(req.query)); });
-  app.post('/v1/memories/list', scope('memory:read'), async (req, res) => { res.json(await store.list(req.body)); });
-  app.get('/v1/memories', scope('memory:read'), async (req, res) => { res.json(await store.get(req.query)); });
-  app.get('/v1/memories/history', scope('memory:read'), async (req, res) => { res.json(await store.history(req.query)); });
-  app.post('/v1/memories', scope('memory:write'), async (req, res) => {
-    const result = await store.write((res.locals.identity as Identity).clientId, req.body);
-    res.status(result.status === 'conflict' ? 409 : result.status === 'created' ? 201 : 200).json(result);
-  });
-  app.post('/v1/memories/delete', scope('memory:write'), async (req, res) => {
-    const result = await store.delete((res.locals.identity as Identity).clientId, req.body);
-    res.status(result.status === 'conflict' ? 409 : 200).json(result);
-  });
+  app.post('/v1/memories/search', scope('memory:read'), memoryRead('memory_search', (req, audit) => {
+    audit.search_timings_ms = {};
+    return search.search(req.body, audit.search_timings_ms);
+  }));
+  app.get('/v1/namespaces', scope('memory:read'), memoryRead('memory_namespaces', req => store.namespaces(req.query)));
+  app.post('/v1/memories/list', scope('memory:read'), memoryRead('memory_list', req => store.list(req.body)));
+  app.get('/v1/memories', scope('memory:read'), memoryRead('memory_get', req => store.get(req.query)));
+  app.get('/v1/memories/history', scope('memory:read'), memoryRead('memory_history', req => store.history(req.query)));
+  function memoryMutation(operation: 'write' | 'delete'): RequestHandler {
+    return async (req, res) => {
+      const audit: MemoryAudit = {};
+      const work = store[operation]((res.locals.identity as Identity).clientId, req.body, () => { audit.idempotent_replay = true; })
+        .then(result => {
+          res.locals.auditMemory = Object.assign(audit, summarizeMemoryResult(`memory_${operation}`, result));
+          return result;
+        });
+      res.locals.auditWork = work;
+      const result = await work;
+      res.status(result.status === 'conflict' ? 409 : result.status === 'created' ? 201 : 200).json(result);
+    };
+  }
+  app.post('/v1/memories', scope('memory:write'), memoryMutation('write'));
+  app.post('/v1/memories/delete', scope('memory:write'), memoryMutation('delete'));
   app.get('/v1/tasks', scope('memory:admin'), async (_req, res) => {
     res.json((await store.pool.query('SELECT memory_id,attempts,failed,available_at,error_code FROM index_jobs ORDER BY available_at LIMIT 100')).rows);
   });
   app.post('/mcp', async (req, res) => {
-    const results = new Map<string | number, string | undefined>();
+    const results = new Map<string | number, ToolAudit>();
     res.locals.auditToolResults = results;
-    const handler = createMcpHandler(() => createMcpServer(store, search, status, res.locals.identity, (id, error) => results.set(id, error)));
-    try { await toNodeHandler(handler)(req, res, req.body); }
+    const handler = createMcpHandler(() => createMcpServer(store, search, status, res.locals.identity, (id, result) => results.set(id, result)));
+    try {
+      const work = toNodeHandler(handler)(req, res, req.body);
+      res.locals.auditWork = work;
+      await work;
+    }
     finally { await handler.close(); }
   });
   app.all('/mcp', (_req, res) => { res.setHeader('Allow', 'POST'); res.status(405).end(); });
