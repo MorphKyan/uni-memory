@@ -23,15 +23,16 @@ export class Qdrant {
       if (!(error instanceof Error) || error.message !== 'qdrant_404') throw error;
       await this.request(`/collections/${name}`, 'PUT', { vectors: { size: dimensions, distance: 'Cosine' } });
     }
-    for (const field of ['namespace', 'namespace_paths', 'tags', 'type', 'verification']) {
+    if (payloadSchema.verification) await this.request(`/collections/${name}/index/verification?wait=true`, 'DELETE');
+    for (const field of ['namespace', 'namespace_paths', 'tags', 'type']) {
       if (!payloadSchema[field]) await this.request(`/collections/${name}/index?wait=true`, 'PUT', { field_name: field, field_schema: 'keyword' });
     }
   }
   async upsert(name: string, memory: Memory, vector: number[]) {
-    const { id, version, namespace, tags, type, verification } = memory;
+    const { id, version, namespace, tags, type } = memory;
     const namespace_paths = namespace.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/'));
     await this.request(`/collections/${name}/points?wait=true`, 'PUT', {
-      points: [{ id, vector, payload: { version, namespace, namespace_paths, tags, type, verification } }],
+      points: [{ id, vector, payload: { version, namespace, namespace_paths, tags, type } }],
     });
   }
   async delete(name: string, id: string) {
@@ -44,7 +45,6 @@ export class Qdrant {
       ...scope.tags.map(tag => ({ key: 'tags', match: { value: tag } })),
     ];
     if (scope.type) must.push({ key: 'type', match: { value: scope.type } });
-    if (scope.verification) must.push({ key: 'verification', match: { value: scope.verification } });
     return this.request(`/collections/${name}/points/search`, 'POST', { vector, limit, with_payload: true, filter: { must } });
   }
 }

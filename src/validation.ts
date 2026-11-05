@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { namespaceSchema, memoryType, verificationSchema, scopeShape } from './scope.js';
+import { namespaceSchema, memoryType, scopeShape } from './scope.js';
 
 export class AppError extends Error {
   constructor(public status: number, public code: string) { super(code); }
@@ -12,7 +12,6 @@ export const memorySelector = z.object({ id: z.uuid().optional(), key: memoryKey
 export const writeSchema = z.object({
   namespace: namespaceSchema,
   type: memoryType,
-  verification: verificationSchema,
   key: memoryKey,
   content: z.string().trim().min(1).max(4000),
   tags: scopeShape.tags,

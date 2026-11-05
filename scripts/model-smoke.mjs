@@ -20,7 +20,7 @@ const embedder = new EmbeddingWorker('gemma2', 'q4', './.cache/models');
 try {
   const store = new Store(pool);
   const qdrant = new Qdrant({ qdrantUrl: `http://${ip('qdrant')}:6333`, qdrantKey: env.QDRANT_API_KEY });
-  const result = await store.write('synthetic-model-smoke', { namespace: 'global', type: 'fact', verification: 'confirmed', key: 'smoke.phrase', content: '用于验证的虚构事实：小熊设备存放在蓝色书房。', source: { reference: 'synthetic:model-smoke' }, idempotency_key: randomUUID() });
+  const result = await store.write('synthetic-model-smoke', { namespace: 'global', type: 'fact', key: 'smoke.phrase', content: '用于验证的虚构事实：小熊设备存放在蓝色书房。', source: { reference: 'synthetic:model-smoke' }, idempotency_key: randomUUID() });
   const indexer = new Indexer(pool, qdrant, embedder);
   await indexer.rebuild();
   for (let i = 0; i < 100 && (await pool.query('SELECT 1 FROM index_jobs')).rowCount; i++) await indexer.tick();

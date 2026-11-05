@@ -40,7 +40,6 @@ const section = ref<'memories' | 'status'>('memories');
 const query = ref(''),
   tagFilter = ref(''),
   typeFilter = ref(''),
-  verificationFilter = ref(''),
   descendants = ref(false);
 const memories = ref<Memory[]>([]),
   cursor = ref<string | null>(null),
@@ -58,7 +57,6 @@ const blank = () => ({
   key: '',
   content: '',
   type: 'fact' as Memory['type'],
-  verification: 'confirmed' as Memory['verification'],
   tags: '',
   pinned: false,
   expires: '',
@@ -182,7 +180,6 @@ function scope() {
     namespaces: names.length ? names : ['global'],
     include_descendants: namespace.value ? descendants.value : false,
     ...(typeFilter.value ? { type: typeFilter.value } : {}),
-    ...(verificationFilter.value ? { verification: verificationFilter.value } : {}),
     tags: tagFilter.value
       .split(/[,，]/)
       .map((s) => s.trim())
@@ -245,7 +242,6 @@ async function loadStatus() {
     filter.tags.forEach((value) => params.append('tags', value));
     params.set('include_descendants', String(filter.include_descendants));
     if (filter.type) params.set('type', filter.type);
-    if (filter.verification) params.set('verification', filter.verification);
     const result = await request<Status>(`/v1/status?${params}`);
     const jobs = await request<typeof tasks.value>('/v1/tasks');
     if (sequence === statusSequence) {
@@ -280,7 +276,6 @@ async function navigate(nextSection: typeof section.value, nextNamespace = '') {
   query.value = '';
   tagFilter.value = '';
   typeFilter.value = '';
-  verificationFilter.value = '';
   descendants.value = false;
   memories.value = [];
   cursor.value = null;
@@ -330,7 +325,6 @@ function edit(isNew = false) {
         key: record.key,
         content: record.content,
         type: record.type,
-        verification: record.verification,
         tags: record.tags.join(', '),
         pinned: record.pinned,
         expires: localDate(record.expires_at),
@@ -367,7 +361,6 @@ async function save() {
     key: value.key.trim(),
     content: value.content,
     type: value.type,
-    verification: value.verification,
     tags: value.tags
       .split(/[,，]/)
       .map((s) => s.trim())
@@ -578,10 +571,6 @@ onUnmounted(() => {
             <select v-model="typeFilter" aria-label="筛选类型" @change="loadList()">
               <option value="">全部类型</option>
               <option v-for="(label, key) in types" :key="key" :value="key">{{ label }}</option></select
-            ><select v-model="verificationFilter" aria-label="筛选核实状态" @change="loadList()">
-              <option value="">全部核实状态</option>
-              <option value="confirmed">已确认</option>
-              <option value="pending">待核实</option></select
             ><input
               v-model="tagFilter"
               class="tag-filter"
@@ -604,7 +593,7 @@ onUnmounted(() => {
               <div class="empty-symbol">◇</div>
               <h3>
                 {{
-                  query || typeFilter || verificationFilter || tagFilter ? '没有匹配的记忆' : '这里还没有记忆'
+                  query || typeFilter || tagFilter ? '没有匹配的记忆' : '这里还没有记忆'
                 }}
               </h3>
               <p>调整筛选条件，或新建一条值得保存的事实。</p>
@@ -620,9 +609,7 @@ onUnmounted(() => {
                 <span class="memory-key">{{ memory.pinned ? '◆ ' : '' }}{{ memory.key }}</span>
                 <div class="badges">
                   <span class="badge">{{ types[memory.type] }}</span
-                  ><span class="badge" :class="memory.verification">{{
-                    memory.verification === 'confirmed' ? '已确认' : '待核实'
-                  }}</span>
+                  >
                 </div>
               </div>
               <p class="preview">{{ memory.content }}</p>
@@ -706,11 +693,6 @@ onUnmounted(() => {
                       >类型<select v-model="form.type">
                         <option v-for="(label, key) in types" :key="key" :value="key">{{ label }}</option>
                       </select></label
-                    ><label
-                      >核实状态<select v-model="form.verification">
-                        <option value="confirmed">已确认</option>
-                        <option value="pending">待核实</option>
-                      </select></label
                     >
                   </div>
                   <label>标签<input v-model="form.tags" placeholder="用逗号分隔，最多 20 个" /></label
@@ -746,9 +728,6 @@ onUnmounted(() => {
                 ><div class="detail-title">
                   <div class="badges">
                     <span class="badge">{{ types[selected.type] }}</span
-                    ><span class="badge" :class="selected.verification">{{
-                      selected.verification === 'confirmed' ? '已确认' : '待核实'
-                    }}</span
                     ><span v-if="selected.pinned" class="badge">置顶</span>
                   </div>
                   <h2>{{ selected.key }}</h2>
@@ -816,7 +795,6 @@ onUnmounted(() => {
                               key: event.snapshot.key,
                               tags: event.snapshot.tags,
                               pinned: event.snapshot.pinned,
-                              verification: event.snapshot.verification,
                               expires_at: event.snapshot.expires_at,
                               sources: event.snapshot.sources,
                             },
@@ -877,7 +855,6 @@ onUnmounted(() => {
             <article
               v-for="item in [
                 { label: '有效记忆', value: status.memories?.active },
-                { label: '待核实', value: status.memories?.pending },
                 { label: '已置顶', value: status.memories?.pinned },
                 { label: '已过期', value: status.memories?.expired },
               ]"

@@ -8,6 +8,8 @@
 
 ## 协作规则
 
+- 修改项目时必须检查并同步所有受影响的 Skill、Plugin 和客户端接入方式，包括 REST、MCP、管理台、CLI、安装器、打包模板、客户端规则与文档，保证接口字段、行为和记忆策略一致。验收应覆盖实际生成或安装的产物。
+
 - 默认使用中文沟通和编写项目文档。
 - 按个人小项目维护，保持结构简单，优先复用标准库、已有依赖和组件。新增依赖以明显减少实现或维护成本为准。
 - Agent 自主完成已确认技术方向内的常规实现、工具和依赖细节。技术方向、模型、外部 API 供应商、隐私与出站内容、记忆更新与删除规则、公网认证的变更，先向用户说明并确认。
@@ -34,12 +36,12 @@
 
 - 当前 Git 项目默认使用 projects/<host>/<仓库路径>。优先读取 origin 的 fetch URL，无 origin 时仅使用唯一远端。HTTPS、SSH 和 SCP 格式均提取主机与完整仓库路径，忽略认证信息、端口、查询参数和片段，去掉首尾斜杠和末尾 .git，统一小写，主机名中的点换成下划线。例如 projects/github_com/morphkyan/uni-memory。远端缺失、歧义或结果不符合 namespace 格式时，使用用户明确指定的分区，归属不明时先询问。项目记忆只在确定的规范分区中检索和写入，不再回退或复用旧项目分区。发现旧分区或 global 中的项目事实时，先核实归属并迁移，保留来源和历史、合并总览并刷新索引；归属不明时先询问，迁移完成后仅使用目标分区。
 - 项目讨论优先查 global 与当前项目分区。memory_core、memory_search 必须指定 namespaces；需要子分区时显式 include_descendants=true。
-- `type` 为 `preference/fact/decision/status`；`verification` 为 `confirmed/pending`，表示事实的核实状态。
+- `type` 为 `preference/fact/decision/status`。
 - 每个有长期记忆的分区维护一条 `key=overview` 的总览，概括用途、核心现状、重要 key 和子分区入口。客户端首次保存事实后创建，关键变化后按版本更新；使用 `type=status`、`expires_at=null`，服务自动置顶，`memory_core` 优先返回。详细事实保存在原条目，用户主动删除总览后的重建遵循其意愿。
-- 0.2.0 接口要求写入显式指定 `namespace/type/verification`，查询显式指定 `namespaces`，按 key 选择时携带 namespace。客户端接入时重新发现工具 schema。
-- 写入采用幂等处理；相同 namespace/key、内容及属性合并来源。更新检查版本并保留历史；不确定冲突保留双方陈述、归属与来源，标记为 `pending`，核实后解决。
+- 0.2.0 接口要求写入显式指定 `namespace/type`，查询显式指定 `namespaces`，按 key 选择时携带 namespace。客户端接入时重新发现工具 schema。
+- 写入采用幂等处理；相同 namespace/key、内容及属性合并来源。更新检查版本并保留历史；不确定冲突保留双方陈述、归属与来源，核实后解决。
 - 删除清除当前正文、历史和来源，立即影响权威查询，并异步传播到全部索引集合。遵循用户的保存和删除要求。
-- 检索使用 pg_trgm、子串匹配和向量检索，经 RRF 融合。两路候选在截断前过滤分区、标签、类型与核实状态，返回前回查 PostgreSQL，排除删除、过期及旧版本记录。
+- 检索使用 pg_trgm、子串匹配和向量检索，经 RRF 融合。两路候选在截断前过滤分区、标签、类型，返回前回查 PostgreSQL，排除删除、过期及旧版本记录。
 - 默认精确分区，显式包含子分区时按路径边界匹配。向量失败时退化为关键词检索，新集合完整后切换。
 - 日常事实读写由客户端与本地服务完成。可选整理 CLI 仅显式发送选中的当前事实 `id/version/key/content`，最多 20 条、16000 字符；返回建议，由用户决定应用。
 - 客户端遵循 Shared Memory Policy v1；技能为 `skills/shared-memory/SKILL.md`，安装器为 `scripts/install-memory-policy.mjs`。按需检索，提取有长期价值的事实，写入前检查已有记录，按版本更新。

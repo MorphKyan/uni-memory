@@ -609,20 +609,6 @@ small {
   white-space: nowrap;
   font-weight: 400;
 }
-.badge.confirmed {
-  color: var(--accent);
-  background: var(--tint);
-  border-color: transparent;
-}
-.badge.pending {
-  color: #a77a2e;
-  background: #f7ebce;
-  border-color: transparent;
-}
-:root[data-theme='dark'] .badge.pending {
-  color: #edc37b;
-  background: #453c25;
-}
 .preview {
   font-size: 12px;
   line-height: 1.9;

@@ -4,7 +4,7 @@ export interface Memory {
   key: string;
   content: string;
   type: 'fact' | 'preference' | 'decision' | 'status';
-  verification: 'confirmed' | 'pending';
+
   tags: string[];
   pinned: boolean;
   expires_at: string | null;
@@ -26,7 +26,7 @@ export interface Status {
   database: string;
   qdrant: string;
   search_mode: string;
-  memories: { active: number; pending: number; pinned: number; expired: number } | null;
+  memories: { active: number; pinned: number; expired: number } | null;
   embedding: {
     model: string | null;
     state: string;

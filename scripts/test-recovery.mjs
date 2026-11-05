@@ -8,7 +8,7 @@ const before = Number(sql('SELECT count(*) FROM memories WHERE deleted_at IS NUL
 assert(before > 0, '请先运行集成测试生成合成事实');
 execFileSync('bash', ['scripts/backup.sh'], { env, stdio: 'inherit' });
 const latest = readdirSync('.backups/uni-memory-test').sort().at(-1); assert(latest);
-sql("INSERT INTO memories(id,key,content,namespace,type,verification) VALUES('00000000-0000-4000-8000-000000000001','recovery.after.backup','备份之后的合成事实','global','fact','confirmed')");
+sql("INSERT INTO memories(id,key,content,namespace,type) VALUES('00000000-0000-4000-8000-000000000001','recovery.after.backup','备份之后的合成事实','global','fact')");
 assert.equal(Number(sql('SELECT count(*) FROM memories WHERE deleted_at IS NULL')), before + 1);
 execFileSync('bash', ['scripts/restore.sh', '--replace-current', `.backups/uni-memory-test/${latest}`], { env, stdio: 'inherit' });
 assert.equal(Number(sql('SELECT count(*) FROM memories WHERE deleted_at IS NULL')), before);

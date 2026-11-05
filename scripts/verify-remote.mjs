@@ -21,7 +21,7 @@ try {
   assert(client.getInstructions()?.includes('Shared Memory Policy v1'));
   const key = `synthetic.deployment.${randomUUID()}`;
   const parent = `projects/synthetic-check/${randomUUID()}`;
-  const input = { namespace: `${parent}/linux`, type: 'fact', verification: 'confirmed', key, pinned: true, tags: ['linux', 'unraid'],
+  const input = { namespace: `${parent}/linux`, type: 'fact', key, pinned: true, tags: ['linux', 'unraid'],
     content: '部署验收合成事实：琥珀色测试小车存放在蓝色书房。', source: { reference: 'synthetic:deployment-check' }, idempotency_key: randomUUID() };
   const written = await call('memory_write', input);
   let memory = written.memory; memories.set(memory.id, memory);
@@ -51,7 +51,7 @@ try {
   let found;
   for (let attempt = 0; attempt < 90; attempt++) {
     found = await call('memory_search', { namespaces: [parent], include_descendants: true, tags: ['linux', 'unraid'],
-      type: 'fact', verification: 'confirmed', query: 'Where is the amber toy car stored?', limit: 10 });
+      type: 'fact', query: 'Where is the amber toy car stored?', limit: 10 });
     if (!found.degraded && found.memories.some(item => item.id === memory.id)) break;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
@@ -61,11 +61,11 @@ try {
   assert.equal(ready.embedding.state, 'ready');
   assert.equal(ready.search_mode, 'hybrid');
   const updated = await call('memory_write', { ...input, content: `${input.content} 待核实的另一说法：存放在绿色客厅。`,
-    verification: 'pending', expected_version: memory.version, source: { reference: 'synthetic:conflicting-report' }, idempotency_key: randomUUID() });
+    expected_version: memory.version, source: { reference: 'synthetic:conflicting-report' }, idempotency_key: randomUUID() });
   memory = updated.memory; memories.set(memory.id, memory);
-  assert.equal(memory.version, 2); assert.equal(memory.verification, 'pending'); assert.equal(memory.sources.length, 2);
+  assert.equal(memory.version, 2); assert.equal(memory.sources.length, 2);
   const history = await call('memory_history', { id: memory.id }); assert.equal(history.length, 2);
-  console.log('部署验收通过：九个 MCP 工具、认证/Origin、默认策略及新字段、分区总览自动置顶及优先返回、分区发现、游标分页、状态与真实推理、跨分区同 key、层级边界、标签/类型/核实过滤、Gemma 2 跨语言检索、待核实冲突与历史。');
+  console.log('部署验收通过：九个 MCP 工具、认证/Origin、默认策略及新字段、分区总览自动置顶及优先返回、分区发现、游标分页、状态与真实推理、跨分区同 key、层级边界、标签/类型过滤、Gemma 2 跨语言检索冲突与历史。');
 } finally {
   const cleanup = await Promise.allSettled([...memories.values()].map(memory => call('memory_delete', { id: memory.id, expected_version: memory.version, idempotency_key: randomUUID() })));
   await client.close();

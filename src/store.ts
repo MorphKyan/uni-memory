@@ -6,12 +6,12 @@ import { transaction } from './db.js';
 
 export interface Memory {
   id: string; key: string; content: string; tags: string[]; pinned: boolean;
-  namespace: string; type: 'preference' | 'fact' | 'decision' | 'status'; verification: 'confirmed' | 'pending';
+  namespace: string; type: 'preference' | 'fact' | 'decision' | 'status';
   expires_at: string | null; version: number; deleted_at: string | null;
 }
 export const visible = "deleted_at IS NULL AND (expires_at IS NULL OR expires_at > now())";
 export interface MemoryStatistics {
-  memories: { active: number; pending: number; pinned: number; expired: number; last_updated_at: string | null };
+  memories: { active: number; pinned: number; expired: number; last_updated_at: string | null };
   index: { total: number; indexed: number; queued: number; failed: number; active_generation: string | null };
 }
 async function enqueue(client: PoolClient, id: string) {
@@ -31,7 +31,6 @@ export class Store {
     ), valid AS (SELECT id,version FROM memories WHERE ${visible})
     SELECT (SELECT json_build_object(
       'active',count(*) FILTER (WHERE expires_at IS NULL OR expires_at>now())::int,
-      'pending',count(*) FILTER (WHERE (expires_at IS NULL OR expires_at>now()) AND verification='pending')::int,
       'pinned',count(*) FILTER (WHERE (expires_at IS NULL OR expires_at>now()) AND pinned)::int,
       'expired',count(*) FILTER (WHERE expires_at<=now())::int,
       'last_updated_at',max(updated_at)) FROM scoped) AS memories,
@@ -40,7 +39,7 @@ export class Store {
         'queued',(SELECT count(*)::int FROM index_jobs WHERE NOT failed),
         'failed',(SELECT count(*)::int FROM index_jobs WHERE failed),
         'active_generation',(SELECT name FROM index_generations WHERE active))
-      FROM valid m LEFT JOIN index_entries e ON e.memory_id=m.id AND e.generation=$6) AS index`,
+      FROM valid m LEFT JOIN index_entries e ON e.memory_id=m.id AND e.generation=$5) AS index`,
     [...scope.values, generation])).rows[0]!;
   }
   async namespaces(input: unknown) {
@@ -58,8 +57,8 @@ export class Store {
     const result = await this.pool.query<Memory & { cursor_created_at: string }>(`SELECT *,
       to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
       FROM memories WHERE ${visible} AND ${scope.sql}
-      AND ($6::timestamptz IS NULL OR (created_at,id)>($6::timestamptz,$7::uuid))
-      ORDER BY created_at,id LIMIT $8`, [...scope.values, cursor?.created_at ?? null, cursor?.id ?? null, data.limit + 1]);
+      AND ($5::timestamptz IS NULL OR (created_at,id)>($5::timestamptz,$6::uuid))
+      ORDER BY created_at,id LIMIT $7`, [...scope.values, cursor?.created_at ?? null, cursor?.id ?? null, data.limit + 1]);
     const page = result.rows.slice(0, data.limit);
     const last = page.at(-1);
     const next_cursor = result.rows.length > data.limit && last
@@ -114,7 +113,7 @@ export class Store {
       let status = 'created';
       if (old) {
         const same = old.content === data.content && JSON.stringify(old.tags) === JSON.stringify(data.tags)
-          && old.type === data.type && old.verification === data.verification
+          && old.type === data.type
           && old.pinned === data.pinned && (old.expires_at ? new Date(old.expires_at).toISOString() : null)
             === (data.expires_at ? new Date(data.expires_at).toISOString() : null);
         if ((data.expected_version !== undefined && data.expected_version !== old.version)
@@ -123,15 +122,15 @@ export class Store {
         }
         if (same) { memory = old; status = 'merged'; }
         else {
-          memory = (await client.query<Memory>(`UPDATE memories SET content=$2,tags=$3,pinned=$4,expires_at=$5,type=$6,verification=$7,
+          memory = (await client.query<Memory>(`UPDATE memories SET content=$2,tags=$3,pinned=$4,expires_at=$5,type=$6,
             version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,
-          [old.id, data.content, data.tags, data.pinned, data.expires_at, data.type, data.verification])).rows[0]!;
+          [old.id, data.content, data.tags, data.pinned, data.expires_at, data.type])).rows[0]!;
           status = 'updated';
         }
       } else {
         if (data.expected_version !== undefined) throw new AppError(409, 'version_without_memory');
-        memory = (await client.query<Memory>('INSERT INTO memories(id,key,content,tags,pinned,expires_at,namespace,type,verification) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
-          [randomUUID(), data.key, data.content, data.tags, data.pinned, data.expires_at, data.namespace, data.type, data.verification])).rows[0]!;
+        memory = (await client.query<Memory>('INSERT INTO memories(id,key,content,tags,pinned,expires_at,namespace,type) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
+          [randomUUID(), data.key, data.content, data.tags, data.pinned, data.expires_at, data.namespace, data.type])).rows[0]!;
       }
       const addedSource = await client.query(`INSERT INTO memory_sources(memory_id,client_id,reference,excerpt) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
         [memory.id, actor, data.source.reference, data.source.excerpt]);
@@ -155,7 +154,7 @@ export class Store {
       const result = { status: 'deleted', id: data.id };
       await client.query('UPDATE idempotency SET result=$2 WHERE memory_id=$1', [data.id, JSON.stringify(result)]);
       await client.query(`UPDATE memories SET key=NULL,content=NULL,tags='{}',pinned=false,expires_at=NULL,
-        namespace='global',type='fact',verification='pending',
+        namespace='global',type='fact',
         version=version+1,deleted_at=now(),updated_at=now() WHERE id=$1`, [data.id]);
       await enqueue(client, data.id);
       return result;

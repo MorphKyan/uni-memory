@@ -26,7 +26,6 @@ MCP 使用无状态 Streamable HTTP，`POST /mcp` 返回 JSON；未启用独立 
   "namespace": "global",
   "key": "user.preference.language",
   "type": "preference",
-  "verification": "confirmed",
   "content": "用户偏好简体中文交流。",
   "tags": ["preference"],
   "pinned": true,
@@ -36,13 +35,13 @@ MCP 使用无状态 Streamable HTTP，`POST /mcp` 返回 JSON；未启用独立 
 }
 ```
 
-`namespace`、`type`、`verification` 必填。namespace 最多 160 字符，使用小写字母、数字、下划线或短横线段，以 `/` 分层；每段以字母或数字开头，不允许空段、前后斜杠或 `.`/`..`。建议通用记忆为 `global`，项目记忆为 `projects/homelab` 等。
+`namespace`、`type` 必填。namespace 最多 160 字符，使用小写字母、数字、下划线或短横线段，以 `/` 分层；每段以字母或数字开头，不允许空段、前后斜杠或 `.`/`..`。建议通用记忆为 `global`，项目记忆为 `projects/homelab` 等。
 
-type 只能为 `preference`、`fact`、`decision`、`status`。verification 为 `confirmed` 或 `pending`，表示核实状态，不代表系统保证客观真伪；引用和推测不得转换为用户已确认事实。不确定冲突可按当前版本将双方陈述及归属合并进原正文，追加来源并标 pending；核实后再次按版本更新。
+type 只能为 `preference`、`fact`、`decision`、`status`。只保存有长期价值且有明确依据的内容，分歧在正文注明来源，更新需检查版本。
 
 `key` 在写入、读取和历史查询时统一进行 NFKC 规范化并去除首尾空白，规范化后须为 1–160 字符；例如 `ｓｅｒｖｅｒ.①` 与 `server.1` 指向同一 key。正文最多 4000 字符，标签最多 20 个，每个 64 字符。来源引用及摘录各最多 512 字符。示例均为合成内容。不得提交完整私人会话或凭据；明显凭据格式会被拒绝，但正则检查不能识别所有敏感信息。
 
-首次写入返回 `{status:"created",memory:...}`；相同 namespace/key、正文及属性合并来源，返回 merged；不同内容或属性且没有 `expected_version` 返回 conflict。纠正或调整类型、核实状态、标签、置顶、有效期时，先读取当前事实，提交完整新值并加 `expected_version`。未给出的 tags/pinned/expires_at 使用空数组/false/null，写入是完整状态而非 PATCH。改变 namespace/key 会指向另一条事实，不是移动操作；写前应跨 global 与当前项目分区去重。
+首次写入返回 `{status:"created",memory:...}`；相同 namespace/key、正文及属性合并来源，返回 merged；不同内容或属性且没有 `expected_version` 返回 conflict。纠正或调整类型、标签、置顶、有效期时，先读取当前事实，提交完整新值并加 `expected_version`。未给出的 tags/pinned/expires_at 使用空数组/false/null，写入是完整状态而非 PATCH。改变 namespace/key 会指向另一条事实，不是移动操作；写前应跨 global 与当前项目分区去重。
 
 REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果；两者都不会覆盖现有事实。每个新操作更换幂等键，网络重试沿用原键。相同客户端、相同键、相同请求返回原结果；同键不同请求返回 idempotency_key_reused。来源身份按调用客户端登记。删除后，旧写入请求的重放只返回 deleted 标识，不恢复正文。
 
@@ -52,7 +51,7 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 
 每个有长期记忆的 namespace 约定一条 `key=overview` 的普通记忆，使用现有读写、历史和删除接口，沿用 `namespace/key` 唯一约束。客户端在首次保存分区事实后创建，在关键内容变化后按版本更新；服务端负责存储与返回，正文由客户端依据事实维护。
 
-写入 overview 时服务自动设置 `pinned=true`，有效期要求 `expires_at=null`；建议 `type=status`，核实状态按正文依据设置。正文包含用途与范围、核心现状、重要记忆 key 和子分区入口，最多 4000 字符。总览作为导航摘要，详细事实以对应原条目为准。
+写入 overview 时服务自动设置 `pinned=true`，有效期要求 `expires_at=null`；建议 `type=status`。正文包含用途与范围、核心现状、重要记忆 key 和子分区入口，最多 4000 字符。总览作为导航摘要，详细事实以对应原条目为准。
 
 通过 `memory_get({namespace:"projects/homelab",key:"overview"})` 精确读取。`memory_core` 在原有过滤范围内优先返回 overview，再按更新时间返回其他置顶事实，总上限仍为 50。来源与版本历史可通过 get/history 查看。首次接入已有分区时，由客户端读取相关事实后补建总览；用户主动删除的总览仅在允许后重建。
 
@@ -66,13 +65,12 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
 
 可传 `{ "parent": "projects" }`，只返回该分区自身及按路径边界匹配的子分区；`projects/home` 不包含 `projects/homelab`。按完整分区名升序返回，count 不累计子分区，包含 overview。分区从 PostgreSQL 当前有效事实汇总，不保留空分区或仅有过期、删除事实的分区，也不虚构没有直属事实的父分区。需要总览时再调用 memory_get。REST 使用 `GET /v1/namespaces?parent=projects`。
 
-`memory_list` 不需要搜索词，不受搜索排名及 core 的 50 条总上限限制；沿用 namespaces/include_descendants/tags/type/verification 过滤。namespaces 必填，默认每页 50 条，limit 为 1–100：
+`memory_list` 不需要搜索词，不受搜索排名及 core 的 50 条总上限限制；沿用 namespaces/include_descendants/tags/type 过滤。namespaces 必填，默认每页 50 条，limit 为 1–100：
 
 ```json
 {
   "namespaces": ["projects/github_com/morphkyan/uni-memory"],
   "include_descendants": true,
-  "verification": "pending",
   "limit": 50
 }
 ```
@@ -94,28 +92,27 @@ REST 冲突状态码为 409，MCP 冲突是含 status=conflict 的业务结果�
   "include_descendants": false,
   "tags": ["unraid", "linux"],
   "type": "decision",
-  "verification": "confirmed",
   "limit": 10
 }
 ```
 
-`namespaces` 必填，1–20 个分区取并集；默认仅精确匹配，`include_descendants:true` 同时包含指定分区及其子分区。`projects/home` 不包含 `projects/homelab`。未提供 type/verification 不过滤对应字段，pending 会明确随记录返回。limit 为 1–50，tags 采用全部包含过滤。
+`namespaces` 必填，1–20 个分区取并集；默认仅精确匹配，`include_descendants:true` 同时包含指定分区及其子分区。`projects/home` 不包含 `projects/homelab`。未提供 type 时不按类型过滤。limit 为 1–50，tags 采用全部包含过滤。
 
 返回 `{memories,degraded,reason}`。关键词检索使用子串及 pg_trgm，和向量排名按 RRF 融合。SQL 与 Qdrant 均在候选截断前执行范围及属性过滤，返回前再回查权威数据库。无模型、模型加载中、推理超时或向量服务失败时返回关键词结果并标记降级。embedding 推理在模型最大上下文处截断，完整正文仍保留供关键词搜索。
 
 所有检索在返回前从 PostgreSQL 核对当前版本、删除状态及有效期；过期事实不能通过 memory_get/search/core 返回，但可显式通过 history 查看。核心记忆是最多 50 条置顶且有效的事实，不是自动生成摘要。
 
-`memory_core` 接受同样的 namespaces/include_descendants/tags/type/verification 条件，不接受 query/limit。REST GET 示例：`/v1/memories/core?namespaces=global&namespaces=projects%2Fhomelab&include_descendants=true`，重复 tags 参数表示多个标签。GET 布尔参数仅接受 true/false。memory_get/history 使用 `{id}` 或 `{namespace,key}`，不接受含糊的单 key。
+`memory_core` 接受同样的 namespaces/include_descendants/tags/type 条件，不接受 query/limit。REST GET 示例：`/v1/memories/core?namespaces=global&namespaces=projects%2Fhomelab&include_descendants=true`，重复 tags 参数表示多个标签。GET 布尔参数仅接受 true/false。memory_get/history 使用 `{id}` 或 `{namespace,key}`，不接受含糊的单 key。
 
-所有分区共用 PostgreSQL 和同一模型的 Qdrant 集合；payload 保存版本、namespace、祖先路径、tags、type、verification，不保存正文或来源。分区用于逻辑组织，不提供客户端权限隔离。
+所有分区共用 PostgreSQL 和同一模型的 Qdrant 集合；payload 保存版本、namespace、祖先路径、tags、type，不保存正文或来源。分区用于逻辑组织，不提供客户端权限隔离。
 
 向量范围使用 namespace 精确匹配或祖先路径数组匹配，标签逐个加入 must 条件；数组与 match any 的语义参见 [Qdrant 官方过滤说明](https://qdrant.tech/documentation/search/filtering/)。
 
-升级迁移 `0002_memory_partitions.sql` 将原记录归入 global/type=fact/verification=pending，保留 UUID、key、正文、版本和原始历史；不推断旧数据的项目归属及核实状态。旧向量集合停用后自动重建相同集合的 payload，完整前查询降级。需要人工核对的旧条目通过正常版本更新调整属性，不改写旧历史。
+升级迁移 `0002_memory_partitions.sql` 将原记录归入 global/type=fact，保留 UUID、key、正文、版本和原始历史；不推断旧数据的项目归属。旧向量集合停用后自动重建相同集合的 payload，完整前查询降级。需要人工核对的旧条目通过正常版本更新调整属性，不改写旧历史。
 
 ## 记忆库状态
 
-`memory_status` 提供当前记忆数量和实例运行状态，不记录变化日志、不触发模型加载或推理。需要 `memory:read`，沿用 namespaces/include_descendants/tags/type/verification 过滤，namespaces 必填：
+`memory_status` 提供当前记忆数量和实例运行状态，不记录变化日志、不触发模型加载或推理。需要 `memory:read`，沿用 namespaces/include_descendants/tags/type 过滤，namespaces 必填：
 
 ```json
 {"namespaces":["global","projects/github_com/morphkyan/uni-memory"],"include_descendants":false}
@@ -128,7 +125,7 @@ REST 使用 `GET /v1/status?namespaces=global&namespaces=projects%2Funi-memory&i
 | status | `ok`：模型最近观测可用、目标集合存在且已激活、全部有效事实版本已索引、无积压或失败任务；`degraded`：数据库可用，但尚未满足上述条件；`unavailable`：统计数据库查询失败 |
 | checked_at / version / uptime_seconds | 查询完成时的 UTC 时间、应用版本、当前进程运行秒数 |
 | scope | 规范化后的查询范围及过滤条件 |
-| memories.active / pending / pinned | 范围内当前有效、有效且待核实、有效且置顶的条目数，包含 overview；pending 是 active 的子集 |
+| memories.active / pinned | 范围内当前有效、有效且置顶的条目数，包含 overview |
 | memories.expired / last_updated_at | 范围内未删除但已过期的数量；范围内未删除事实（含过期）的最近更新时间，空范围为 null，单纯新增来源不改变该时间 |
 | database / qdrant | `ok` 或 `unavailable`；分别反映统计 SQL 与 Qdrant 集合列表查询是否成功 |
 | embedding | 模型名称、dtype、dimensions、最近观测的 state 与固定 error_code；不返回路径或原始异常 |
@@ -146,3 +143,5 @@ embedding.state 为 `disabled`（未配置 Worker）、`unloaded`（尚未使用
 `/healthz` 只表示 HTTP 存活。`/readyz` 检查 PostgreSQL 和 Qdrant，并报告是否配置模型；它不保证模型已下载或索引已完成。
 
 REST 错误使用 `{error:CODE}`；MCP 工具错误使用 `isError:true` 与 JSON 文本。错误不返回 SQL、凭据、事实正文或上游原始响应。请求体上限 32 KiB；Host/Origin 不匹配拒绝；服务默认每来源 IP 每分钟 120 请求，授权端点 30，交互提交 10。服务只信任配置的代理网段，不信任任意转发头。
+
+核实状态字段已移除。升级执行 0003_remove_verification.sql，当前事实、历史快照及幂等返回移除该属性，其余正文、来源和版本保留，索引重新登记。旧客户端须同步更新规则并重新发现 MCP schema，去除写入与查询中的 verification 字段。长期价值由客户端按共享策略判断，服务端保留结构校验、凭据检测和版本冲突检查。

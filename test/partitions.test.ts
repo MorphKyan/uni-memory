@@ -21,7 +21,7 @@ test('发现分区与列表严格校验范围、页大小和游标', () => {
 });
 
 test('分区总览 key 规范化并要求长期有效，普通事实支持有效期', () => {
-  const input = { namespace: 'projects/homelab', key: 'ｏｖｅｒｖｉｅｗ', type: 'status', verification: 'confirmed',
+  const input = { namespace: 'projects/homelab', key: 'ｏｖｅｒｖｉｅｗ', type: 'status',
     content: '用途：家庭服务。现状：运行中。入口：server.os。', source: { reference: 'synthetic:overview' }, idempotency_key: 'overview' };
   const overview = writeSchema.parse({ ...input, pinned: false });
   assert.equal(overview.key, 'overview');
@@ -32,10 +32,12 @@ test('分区总览 key 规范化并要求长期有效，普通事实支持有效
 });
 
 test('分区字段必须显式提供，拒绝含糊选择器和非法层级', () => {
-  const input = { namespace: 'projects/homelab', key: 'server.os', type: 'decision', verification: 'confirmed',
+  const input = { namespace: 'projects/homelab', key: 'server.os', type: 'decision',
     content: '采用 Unraid', source: { reference: 'synthetic:partition' }, idempotency_key: 'operation' };
   assert.equal(writeSchema.parse(input).namespace, 'projects/homelab');
-  for (const field of ['namespace', 'type', 'verification']) {
+  assert.throws(() => writeSchema.parse({ ...input, verification: 'confirmed' }));
+  assert.throws(() => searchSchema.parse({ query: 'server', namespaces: ['global'], verification: 'pending' }));
+  for (const field of ['namespace', 'type']) {
     const missing: Record<string, unknown> = { ...input }; delete missing[field];
     assert.throws(() => writeSchema.parse(missing));
   }
@@ -50,7 +52,7 @@ test('分区字段必须显式提供，拒绝含糊选择器和非法层级', ()
 });
 
 test('key 在写入和选择器中采用相同规范化，并校验规范化后的长度', () => {
-  const input = { namespace: 'global', key: 'ｓｅｒｖｅｒ.①', type: 'fact', verification: 'confirmed',
+  const input = { namespace: 'global', key: 'ｓｅｒｖｅｒ.①', type: 'fact',
     content: '合成事实', source: { reference: 'synthetic:unicode' }, idempotency_key: 'operation' };
   assert.equal(writeSchema.parse(input).key, 'server.1');
   assert.equal(memorySelector.parse({ namespace: input.namespace, key: input.key }).key, 'server.1');

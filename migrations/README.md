@@ -11,3 +11,5 @@
 运行 `npm run build` 后设置 `DATABASE_URL`，再运行 `npm run migrate`。
 迁移工具使用 PostgreSQL advisory lock 串行执行，并保存 SHA-256 校验值。
 首次执行会创建工具自身的 `schema_migrations` 表，再执行尚未应用的业务迁移。服务启动也会检查和应用迁移；升级前先备份。
+
+`0003_remove_verification.sql` 移除核实字段及历史快照、幂等返回中的对应属性，正文、来源、版本和其余历史保留。索引重新登记，完整前使用关键词检索。升级时同步客户端规则和 MCP schema，旧 verification 写入与查询字段将被拒绝。

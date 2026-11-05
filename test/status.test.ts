@@ -12,7 +12,7 @@ function fixture() {
     embed: async () => { throw new Error('status 不得触发推理'); },
   };
   const statistics: MemoryStatistics = {
-    memories: { active: 2, pending: 1, pinned: 1, expired: 0, last_updated_at: null },
+    memories: { active: 2, pinned: 1, expired: 0, last_updated_at: null },
     index: { total: 3, indexed: 3, queued: 0, failed: 0, active_generation: collectionName(embedder) },
   };
   const store = { statistics: async () => statistics } as unknown as Store;
