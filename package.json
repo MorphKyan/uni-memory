@@ -8,9 +8,7 @@
   },
   "scripts": {
     "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "tsc -p tsconfig.json && npm run build:web",
-    "build:web": "node scripts/check-web.cjs -p web/tsconfig.json && vite build web --config web/vite.config.ts",
-    "dev:web": "vite web --config web/vite.config.ts",
+    "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/test/*.test.js",
     "start": "node dist/src/main.js",
     "migrate": "node dist/src/migrate.js",
@@ -38,11 +36,6 @@
     "@types/node": "24.19.2",
     "@types/oidc-provider": "9.12.1",
     "@types/pg": "8.23.1",
-    "@vitejs/plugin-vue": "6.0.10",
-    "typescript": "7.0.2",
-    "typescript-vue": "npm:typescript@6.0.3",
-    "vite": "8.3.5",
-    "vue-tsc": "3.3.14",
-    "vue": "3.5.44"
+    "typescript": "7.0.2"
   }
 }

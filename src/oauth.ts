@@ -1,12 +1,13 @@
 import { readFile } from 'node:fs/promises';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import Provider, { errors } from 'oidc-provider';
 import type { Pool } from 'pg';
 import express, { type Express } from 'express';
 import { z } from 'zod';
 import type { Config } from './config.js';
-import { passwordMatches } from './auth.js';
 import { AppError } from './validation.js';
+
+const deploymentTokenPattern = /^[A-Za-z0-9_-]{32,256}$/;
 
 function oauthAdapter(pool: Pool) {
   return class Adapter {
@@ -34,10 +35,14 @@ function oauthAdapter(pool: Pool) {
   };
 }
 export async function createOAuth(pool: Pool, cfg: Config) {
-  if (!cfg.ownerHash || !cfg.cookieKey || cfg.cookieKey.length < 32) throw new Error('OAuth 缺少 owner hash 或 cookie key');
+  if (!cfg.deploymentToken || !deploymentTokenPattern.test(cfg.deploymentToken)) {
+    throw new Error('OAuth 需要 32–256 字符的 DEPLOYMENT_TOKEN，仅允许字母、数字、下划线和连字符');
+  }
+  if (!cfg.cookieKey || cfg.cookieKey.length < 32) throw new Error('OAuth 缺少有效的 OAUTH_COOKIE_KEY');
   const clients = z.array(z.object({
     client_id: z.string().min(1), client_secret: z.string().min(32).optional(),
     redirect_uris: z.array(z.url()).min(1),
+    application_type: z.enum(['web', 'native']).default('web'),
     token_endpoint_auth_method: z.enum(['none', 'client_secret_post', 'client_secret_basic']).default('none'),
   }).strict()).parse(JSON.parse(cfg.oauthClients));
   for (const client of clients) {
@@ -53,7 +58,8 @@ export async function createOAuth(pool: Pool, cfg: Config) {
   const provider = new Provider(`${cfg.publicUrl}/oauth`, {
     adapter: oauthAdapter(pool),
     jwks: JSON.parse(await readFile(cfg.jwksPath, 'utf8')),
-    cookies: { keys: [cfg.cookieKey], long: { sameSite: 'lax' }, short: { sameSite: 'lax' } },
+    // 更换部署令牌时失效的是浏览器会话，已发出的客户端令牌按原授权管理。
+    cookies: { keys: [createHmac('sha256', cfg.cookieKey).update(cfg.deploymentToken).digest('hex')], long: { sameSite: 'lax' }, short: { sameSite: 'lax' } },
     clients: clients.map(client => ({ ...client, grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] })),
     scopes: ['openid', 'offline_access', 'memory:read', 'memory:write'],
     claims: { openid: ['sub'] },
@@ -62,7 +68,10 @@ export async function createOAuth(pool: Pool, cfg: Config) {
     pkce: { required: () => true },
     features: {
       devInteractions: { enabled: false },
-      revocation: { enabled: true },
+      revocation: {
+        enabled: true,
+        allowedPolicy: (_ctx, client, token) => token.clientId === client.clientId,
+      },
       resourceIndicators: {
         enabled: true,
         defaultResource: () => cfg.resource,
@@ -83,6 +92,7 @@ export async function createOAuth(pool: Pool, cfg: Config) {
 }
 const escapeHtml = (input: unknown) => String(input).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 export function mountOAuth(app: Express, provider: Provider, cfg: Config) {
+  const tokenDigest = cfg.deploymentToken && createHash('sha256').update(cfg.deploymentToken).digest();
   app.use(['/oauth', '/interaction'], (req, _res, next) => {
     if (cfg.publicUrl.startsWith('https:') && !req.secure) throw new AppError(403, 'https_required');
     next();
@@ -105,8 +115,10 @@ export function mountOAuth(app: Express, provider: Provider, cfg: Config) {
     res.send(`<!doctype html><html lang="zh"><meta charset="utf-8"><title>uni-memory 授权</title><h1>uni-memory</h1>
       <p>客户端：${escapeHtml(details.params.client_id)}</p><p>权限：${escapeHtml(details.params.scope)}</p>
       <form method="post" action="/interaction/${escapeHtml(details.uid)}"><input type="hidden" name="csrf" value="${csrf}">
-      ${details.prompt.name === 'login' ? '<label>个人口令 <input type="password" name="password" maxlength="1024" required autocomplete="current-password"></label>' : '<p>允许此客户端访问以上记忆权限？</p>'}
-      <button type="submit">${details.prompt.name === 'login' ? '登录' : '允许'}</button></form></html>`);
+      ${details.prompt.name === 'login'
+        ? '<label>部署令牌 <input type="password" name="deployment_token" maxlength="256" required autocomplete="off"></label><button type="submit">继续</button><button type="submit" name="decision" value="deny" formnovalidate>拒绝</button>'
+        : '<p>允许此客户端访问以上记忆权限？</p><button type="submit" name="decision" value="allow">允许</button><button type="submit" name="decision" value="deny">拒绝</button>'}
+      </form></html>`);
   });
   app.post('/interaction/:uid', express.urlencoded({ extended: false, limit: '4kb' }), async (req, res) => {
     if (req.headers.origin !== cfg.publicUrl) throw new AppError(403, 'invalid_origin');
@@ -114,10 +126,19 @@ export function mountOAuth(app: Express, provider: Provider, cfg: Config) {
     const submitted = typeof req.body.csrf === 'string' && /^[a-f0-9]{64}$/.test(req.body.csrf) ? req.body.csrf : '';
     if (!cookie || !submitted || !timingSafeEqual(Buffer.from(cookie), Buffer.from(submitted))) throw new AppError(403, 'invalid_csrf');
     const details = await interactionDetails(req, res);
+    if (req.body.decision === 'deny') {
+      await provider.interactionFinished(req, res, { error: 'access_denied' }, { mergeWithLastSubmission: false });
+      return;
+    }
     if (details.prompt.name === 'login') {
-      if (typeof req.body.password !== 'string' || !await passwordMatches(req.body.password, cfg.ownerHash!)) throw new AppError(401, 'invalid_login');
+      const token = req.body.deployment_token;
+      if (!tokenDigest || typeof token !== 'string' || !deploymentTokenPattern.test(token)
+        || !timingSafeEqual(createHash('sha256').update(token).digest(), tokenDigest)) {
+        throw new AppError(401, 'invalid_login');
+      }
       await provider.interactionFinished(req, res, { login: { accountId: 'owner' } }, { mergeWithLastSubmission: false });
     } else if (details.prompt.name === 'consent' && details.session?.accountId === 'owner') {
+      if (req.body.decision !== 'allow') throw new AppError(400, 'invalid_consent');
       const grant = details.grantId ? await provider.Grant.find(details.grantId) : new provider.Grant({ accountId: 'owner', clientId: String(details.params.client_id) });
       if (!grant) throw new AppError(400, 'invalid_grant');
       const info = details.prompt.details;

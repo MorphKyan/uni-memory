@@ -43,7 +43,7 @@ export function decodeListCursor(cursor: string) {
 }
 export function rejectSecrets(value: unknown) {
   const string = JSON.stringify(value);
-  if (/(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-(?:proj-)?[a-zA-Z0-9_-]{16,}|\b(?:password|api[_-]?key|access[_-]?token|secret)\s*[:=]\s*["']?[^\s"',}]{8,}|https?:\/\/[^\s/:]+:[^\s/@]+@)/i.test(string)) {
+  if (/(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-(?:proj-)?[a-zA-Z0-9_-]{16,}|\b(?:password|api[_-]?key|access[_-]?token|deployment[_-]?token|secret)\s*[:=]\s*["']?[^\s"',}]{8,}|https?:\/\/[^\s/:]+:[^\s/@]+@)/i.test(string)) {
     throw new AppError(422, 'possible_credentials');
   }
 }

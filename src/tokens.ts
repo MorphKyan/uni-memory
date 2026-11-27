@@ -41,7 +41,7 @@ export async function issueToken(pool: Pool, clientId: string, scopes: string[],
   return { id: bearer.id, token };
 }
 export async function listBearers(pool: Pool) {
-  return (await pool.query<BearerRecord>(`SELECT ${columns} FROM client_tokens ORDER BY expires_at DESC,id`)).rows;
+  return (await pool.query<BearerRecord>(`SELECT ${columns} FROM client_tokens ORDER BY expires_at,id`)).rows;
 }
 export async function changeBearer(pool: Pool, id: unknown, action: unknown, input: unknown) {
   const tokenId = z.uuid().parse(id);

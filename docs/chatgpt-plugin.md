@@ -1,6 +1,6 @@
 # ChatGPT 自动记忆插件
 
-插件将 MCP 连接配置和自动记忆 Skill 打包在一起。MCP 使用 OAuth 授权码和 PKCE，服务在 `OAUTH_CLIENTS_JSON` 中登记客户端及回调。
+插件将 MCP 连接配置和自动记忆 Skill 打包在一起。MCP 使用 OAuth 授权码和 PKCE，服务在 `OAUTH_CLIENTS_JSON` 中登记客户端及回调。首次连接时在 uni-memory 授权页输入部署令牌并确认权限。插件配置只包含客户端标识和 OAuth 端点。
 
 在仓库根目录运行打包器，将 `MCP_URL` 替换为服务的 HTTPS MCP 入口，将 `CLIENT_ID` 替换为已登记的客户端 ID：
 

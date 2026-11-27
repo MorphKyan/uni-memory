@@ -6,13 +6,11 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 import type { Identity } from './auth.js';
 import { memoryType } from './scope.js';
-import type { BearerRecord } from './tokens.js';
 
 const routes = new Set([
   '/', '/healthz', '/readyz', '/mcp',
   '/v1/memories', '/v1/memories/core', '/v1/memories/search', '/v1/memories/history',
   '/v1/memories/list', '/v1/memories/delete', '/v1/status', '/v1/namespaces', '/v1/tasks',
-  '/ui/session', '/ui/login', '/ui/logout', '/ui/password', '/ui/bearers',
   '/oauth/auth', '/oauth/token', '/oauth/token/revocation', '/oauth/jwks', '/oauth/.well-known/oauth-authorization-server',
   '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp',
   '/.well-known/oauth-authorization-server', '/.well-known/oauth-authorization-server/oauth',
@@ -133,13 +131,10 @@ export function auditRequests(pool: Pool): RequestHandler {
   }
   return (req, res, next) => {
     const path = req.path.replace(/\/$/, '').toLowerCase() || '/';
-    // 轮询和读取审计本身不会制造新日志。探针仍会留下独立记录。
-    if (path.startsWith('/assets/') || ((path === '/ui/audit' || path === '/ui/session') && req.method === 'GET')) return next();
     const channel = /^\/v1(?:\/|$)/.test(path) ? 'rest' : /^\/mcp(?:\/|$)/.test(path) ? 'mcp'
-      : /^\/(?:oauth|interaction|\.well-known)(?:\/|$)/.test(path) ? 'oauth' : /^\/ui(?:\/|$)/.test(path) ? 'admin' : 'other';
+      : /^\/(?:oauth|interaction|\.well-known)(?:\/|$)/.test(path) ? 'oauth' : 'other';
     const route = routes.has(path) ? path
-      : /^\/ui\/bearers\/[^/]+\/(edit|rotate|revoke)$/.test(path) ? `/ui/bearers/:id/${path.split('/').at(-1)}`
-        : /^\/interaction\/[^/]+$/.test(path) ? '/interaction/:uid' : '(unmatched)';
+      : /^\/interaction\/[^/]+$/.test(path) ? '/interaction/:uid' : '(unmatched)';
     const requestId = randomUUID();
     const started = new Date();
     const time = performance.now();
@@ -163,7 +158,6 @@ export function auditRequests(pool: Pool): RequestHandler {
         const rpc = !Array.isArray(body) ? describeRpc(body, status, results) : undefined;
         const error = res.locals.auditError ?? rpc?.error ?? (batch?.some(item => item.error) ? 'batch_tool_failed' : undefined);
         const mcpVersion = req.get('mcp-protocol-version') ?? (!Array.isArray(body) ? body?.params?.protocolVersion : undefined);
-        const bearer = res.locals.auditBearer as BearerRecord | undefined;
         const details = {
           source_ip: sourceIp,
           ...rpc?.metrics,
@@ -172,15 +166,10 @@ export function auditRequests(pool: Pool): RequestHandler {
           protocol: req.secure ? 'https' : req.protocol === 'http' ? 'http' : undefined,
           mcp_version: route === '/mcp' && typeof mcpVersion === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(mcpVersion) ? mcpVersion : undefined,
           auth: identity?.tokenId ? 'bearer' : identity?.clientId.startsWith('oauth:') ? 'oauth'
-            : identity ? 'session' : req.headers.authorization ? 'unverified' : undefined,
+            : req.headers.authorization ? 'unverified' : undefined,
           request_bytes: byteLength(req.get('content-length')),
           response_bytes: byteLength(res.getHeader('content-length')),
           error,
-          target_token_id: bearer?.id ?? res.locals.auditTargetTokenId,
-          target_client_id: bearer?.client_id,
-          target_scopes: bearer?.scopes,
-          target_expires_at: bearer?.expires_at,
-          target_version: bearer?.version,
           rpc_batch: batch?.map(({ metrics, ...call }) => ({ ...call, ...metrics })),
           rpc_batch_size: Array.isArray(body) ? body.length : undefined,
           input: channel === 'rest' && route !== '(unmatched)' ? describeInput(req.method === 'GET' || req.method === 'HEAD' ? req.query : req.body)

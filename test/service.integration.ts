@@ -18,8 +18,8 @@ import { Qdrant } from '../src/qdrant.js';
 import { Indexer } from '../src/indexer.js';
 import { config, type Config } from '../src/config.js';
 import { createApp } from '../src/app.js';
-import { passwordHash } from '../src/auth.js';
-import { issueToken } from '../src/tokens.js';
+import { readAudit } from '../src/audit.js';
+import { changeBearer, createBearer, issueToken, listBearers } from '../src/tokens.js';
 import { createOAuth } from '../src/oauth.js';
 import { collectionName, type Embedder } from '../src/embedding.js';
 import { organize } from '../src/organize.js';
@@ -39,7 +39,7 @@ async function request(path: string, token = reader, body?: unknown, headers: Re
 }
 before(async () => {
   await migrate(pool, await readMigrations());
-  await pool.query('TRUNCATE memories,memory_sources,memory_events,idempotency,index_jobs,index_entries,index_generations,client_tokens,oauth_state,admin_password,request_audit RESTART IDENTITY');
+  await pool.query('TRUNCATE memories,memory_sources,memory_events,idempotency,index_jobs,index_entries,index_generations,client_tokens,oauth_state,request_audit RESTART IDENTITY');
   server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); assert(address && typeof address !== 'string');
   base = `http://127.0.0.1:${address.port}`;
@@ -56,146 +56,96 @@ after(async () => {
   await pool.end();
 });
 
-test('管理台持久化改密、管理现有 Bearer，并统计 REST 和 MCP 审计', async () => {
-  const password = 'synthetic-admin-bootstrap';
-  const newPassword = 'synthetic-admin-rotated';
+test('CLI 管理现有 Bearer 的数据操作，并统计 REST 和 MCP 审计', async () => {
   const client = 'audit-' + randomUUID();
   const clientBefore = client + '-previous';
   const existing = await issueToken(pool, clientBefore, ['memory:read']);
-  const openUi = async () => {
-    const ui = createApp({ cfg: { ...cfg, adminPassword: password }, store, qdrant, search: new Search(store, qdrant) });
-    const local = ui.listen(0, '127.0.0.1'); await once(local, 'listening');
-    const address = local.address(); assert(address && typeof address !== 'string');
-    return {
-      root: `http://127.0.0.1:${address.port}`,
-      close: () => new Promise<void>(resolve => { local.close(() => resolve()); local.closeAllConnections(); }),
-    };
-  };
-  let ui = await openUi();
-  const browser = { 'X-Uni-Memory-UI': '1', 'Content-Type': 'application/json' };
-  const call = (path: string, body?: unknown, headers: Record<string, string> = {}) => fetch(ui.root + path, {
-    method: body === undefined ? 'GET' : 'POST', headers: { ...browser, ...headers },
-    body: body === undefined ? undefined : JSON.stringify(body),
+  const listed = await listBearers(pool);
+  const old = listed.find(row => row.id === existing.id);
+  assert(old);
+  assert.equal(old.client_id, clientBefore);
+  assert(!JSON.stringify(listed).includes(existing.token));
+  assert(!JSON.stringify(listed).includes('token_hash'));
+  const issued = await createBearer(pool, { client_id: client, scopes: ['memory:read'], days: 1 });
+  assert.equal((await request('/v1/namespaces', issued.token)).status, 200);
+
+  const expires = new Date(Date.now() + 2 * 86400_000).toISOString();
+  const { bearer: settings } = await changeBearer(pool, existing.id, 'edit', {
+    expected_version: old.version, client_id: client, scopes: ['memory:read', 'memory:write'], expires_at: expires,
   });
-  async function login(value: string) {
-    const response = await call('/ui/login', { password: value });
-    assert.equal(response.status, 200);
-    return { Cookie: response.headers.getSetCookie()[0]!.split(';')[0]!, 'X-CSRF-Token': (await response.json()).csrf as string };
+  assert.equal(settings.expires_at.toISOString(), expires);
+  assert.deepEqual(settings.scopes, ['memory:read', 'memory:write']);
+  assert.equal(settings.client_id, client);
+  await assert.rejects(changeBearer(pool, existing.id, 'rotate', { expected_version: old.version }), { status: 409 });
+  const rotation = await changeBearer(pool, existing.id, 'rotate', { expected_version: settings.version });
+  assert(rotation.token);
+  assert.equal(rotation.bearer.id, existing.id);
+  assert.equal((await request('/v1/namespaces', existing.token)).status, 401);
+
+  const query = 'synthetic private query text';
+  const read = await request('/v1/memories/search', rotation.token, { namespaces: ['global'], query }, { 'X-Forwarded-For': '198.51.100.11' });
+  assert.equal(read.status, 200);
+  const requestId = read.headers.get('x-request-id');
+  assert(requestId);
+  const rpc = (name: string, args: unknown) => request('/mcp', issued.token, {
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name, arguments: args, _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } },
+  }, { Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'tools/call', 'Mcp-Name': name });
+  assert(!(await (await rpc('memory_list', { namespaces: ['global'] })).json()).result.isError);
+  const denied = await rpc('memory_write', fact());
+  assert.equal(denied.status, 403);
+  const challenge = denied.headers.get('www-authenticate');
+  assert(challenge?.includes('error="insufficient_scope"') && challenge.includes('scope="memory:write"'));
+  const batched = await request('/mcp', issued.token, [
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_context', arguments: { namespaces: ['global'] } } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'memory_write', arguments: fact() } },
+  ], { Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-03-26' });
+  assert.equal(batched.status, 200);
+  await batched.text();
+  await changeBearer(pool, existing.id, 'revoke', { expected_version: rotation.bearer.version });
+  assert.equal((await request('/v1/namespaces', rotation.token)).status, 401);
+  await assert.rejects(changeBearer(pool, existing.id, 'rotate', { expected_version: rotation.bearer.version + 1 }), { status: 409 });
+
+  let report;
+  for (let i = 0; i < 20; i++) {
+    report = await readAudit(pool, { client });
+    if (report.entries.length >= 6) break;
+    await delay(25);
   }
-  try {
-    const session = await login(password);
-    const otherSession = await login(password);
-    assert.equal((await call('/ui/bearers', undefined, { Authorization: `Bearer ${admin}` })).status, 401);
-    assert.equal((await call('/ui/audit')).status, 401);
-    const listed = await (await call('/ui/bearers', undefined, session)).json();
-    const old = listed.find((row: { id: string }) => row.id === existing.id);
-    assert.equal(old.client_id, clientBefore);
-    assert(!JSON.stringify(listed).includes(existing.token));
-    assert(!JSON.stringify(listed).includes('token_hash'));
-    assert.equal((await call('/ui/bearers', { client_id: client, scopes: ['memory:read'] }, { Cookie: session.Cookie })).status, 403);
-    const created = await call('/ui/bearers', { client_id: client, scopes: ['memory:read'], days: 1 }, session);
-    assert.equal(created.status, 201);
-    const issued = await created.json();
-    assert.equal((await request('/v1/namespaces', issued.token)).status, 200);
-
-    const route = '/ui/bearers/' + existing.id;
-    const expires = new Date(Date.now() + 2 * 86400_000).toISOString();
-    const edited = await call(route + '/edit', {
-      expected_version: old.version, client_id: client, scopes: ['memory:read', 'memory:write'], expires_at: expires,
-    }, session);
-    assert.equal(edited.status, 200);
-    const settings = (await edited.json()).bearer;
-    assert.equal(settings.expires_at, expires);
-    assert.deepEqual(settings.scopes, ['memory:read', 'memory:write']);
-    assert.equal(settings.client_id, client);
-    assert.equal((await call(route + '/rotate', { expected_version: old.version }, session)).status, 409);
-    const rotated = await call(route + '/rotate', { expected_version: settings.version }, session);
-    assert.equal(rotated.status, 200);
-    const rotation = await rotated.json();
-    assert.equal(rotation.bearer.id, existing.id);
-    assert.equal((await request('/v1/namespaces', existing.token)).status, 401);
-
-    const query = 'synthetic private query text';
-    const read = await request('/v1/memories/search', rotation.token, { namespaces: ['global'], query }, { 'X-Forwarded-For': '198.51.100.11' });
-    assert.equal(read.status, 200);
-    const requestId = read.headers.get('x-request-id');
-    assert(requestId);
-    const rpc = (name: string, args: unknown) => request('/mcp', issued.token, {
-      jsonrpc: '2.0', id: 1, method: 'tools/call',
-      params: { name, arguments: args, _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } },
-    }, { Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'tools/call', 'Mcp-Name': name });
-    assert(!(await (await rpc('memory_list', { namespaces: ['global'] })).json()).result.isError);
-    assert.equal((await (await rpc('memory_write', fact())).json()).result.isError, true);
-    const batched = await request('/mcp', issued.token, [
-      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'memory_context', arguments: { namespaces: ['global'] } } },
-      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'memory_write', arguments: fact() } },
-    ], { Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-03-26' });
-    assert.equal(batched.status, 200);
-    await batched.text();
-    const revoke = await call(route + '/revoke', { expected_version: rotation.bearer.version }, session);
-    assert.equal(revoke.status, 200);
-    assert.equal((await request('/v1/namespaces', rotation.token)).status, 401);
-    assert.equal((await call(route + '/rotate', { expected_version: rotation.bearer.version + 1 }, session)).status, 409);
-
-    let report;
-    for (let i = 0; i < 20; i++) {
-      const response = await call('/ui/audit?client=' + client, undefined, session);
-      assert.equal(response.status, 200);
-      report = await response.json();
-      if (report.entries.length >= 6) break;
-      await delay(25);
-    }
-    const search = report.entries.find((row: { request_id: string }) => row.request_id === requestId);
-    assert.equal(search.token_id, existing.id);
-    assert.equal(search.details.input.query_length, query.length);
-    assert.equal(search.details.source_ip, '127.0.0.1');
-    assert.equal(search.details.returned_count, 0);
-    assert.equal(search.details.search_degraded, true);
-    assert(search.details.search_timings_ms.postgresql >= 0);
-    assert(search.duration_ms >= search.details.search_timings_ms.postgresql);
-    assert(report.entries.some((row: { tool: string; outcome: string }) => row.tool === 'memory_list' && row.outcome === 'success'));
-    assert(report.entries.some((row: { tool: string; outcome: string; status: number }) => row.tool === 'memory_write' && row.outcome === 'error' && row.status === 200));
-    const batch = report.entries.find((row: { rpc_method: string }) => row.rpc_method === '(batch)');
-    assert.equal(batch.outcome, 'error');
-    assert.deepEqual(batch.details.rpc_batch.map((item: { tool: string; error?: string }) => [item.tool, item.error]),
-      [['memory_context', undefined], ['memory_write', 'insufficient_scope']]);
-    assert.equal(batch.details.rpc_batch[0].returned_count, 0);
-    assert(batch.details.rpc_batch[0].tool_duration_ms >= 0);
-    assert.equal(batch.details.rpc_batch[1].returned_count, undefined);
-    assert(report.buckets.some((bucket: { outcome: string; count: number }) => bucket.outcome === 'error' && bucket.count >= 2));
-    for (const value of [query, rotation.token, issued.token, '198.51.100.11']) assert(!JSON.stringify(report).includes(value));
-    const errors = await (await call(`/ui/audit?client=${client}&channel=mcp&outcome=error`, undefined, session)).json();
-    assert.equal(errors.entries.length, 2);
-    const paged = client + '-page';
-    await pool.query(`INSERT INTO request_audit(request_id,started_at,channel,route,method,status,duration_ms,client_id,outcome,details)
-      SELECT gen_random_uuid(),now()-n*interval '1 second','rest','/v1/namespaces','GET',200,1,$1,'success','{}'
-      FROM generate_series(1,51) n ORDER BY n`, [paged]);
-    const firstPage = await (await call(`/ui/audit?client=${paged}`, undefined, session)).json();
-    assert.equal(firstPage.entries.length, 50);
-    assert(Date.parse(firstPage.entries[0].started_at) > Date.parse(firstPage.entries[49].started_at));
-    const cursor = new URLSearchParams({ client: paged, before: firstPage.next, until: firstPage.until });
-    const lastPage = await (await call(`/ui/audit?${cursor}`, undefined, session)).json();
-    assert.equal(lastPage.entries.length, 1);
-    assert.equal(lastPage.next, null);
-    assert(Date.parse(firstPage.entries[49].started_at) > Date.parse(lastPage.entries[0].started_at));
-
-    const input = { current_password: password, new_password: newPassword };
-    assert.equal((await call('/ui/password', input, { Cookie: session.Cookie })).status, 403);
-    assert.equal((await call('/ui/password', { ...input, current_password: 'wrong' }, session)).status, 401);
-    const changed = await call('/ui/password', input, session);
-    assert.equal(changed.status, 204);
-    assert.match(changed.headers.getSetCookie()[0]!, /Expires=Thu, 01 Jan 1970/);
-    for (const headers of [session, otherSession]) assert.equal((await call('/ui/audit', undefined, headers)).status, 401);
-    const stored = (await pool.query('SELECT password_hash FROM admin_password')).rows[0].password_hash;
-    assert.match(stored, /^[a-f0-9]{32}:[a-f0-9]{128}$/);
-    await ui.close();
-    ui = await openUi();
-    assert.equal((await call('/ui/login', { password })).status, 401);
-    await login(newPassword);
-  } finally {
-    await ui.close();
-    await pool.query('DELETE FROM admin_password');
-  }
+  assert(report);
+  const search = report.entries.find((row: { request_id: string }) => row.request_id === requestId);
+  assert.equal(search.token_id, existing.id);
+  assert.equal(search.details.input.query_length, query.length);
+  assert.equal(search.details.source_ip, '127.0.0.1');
+  assert.equal(search.details.returned_count, 0);
+  assert.equal(search.details.search_degraded, true);
+  assert(search.details.search_timings_ms.postgresql >= 0);
+  assert(search.duration_ms >= search.details.search_timings_ms.postgresql);
+  assert(report.entries.some((row: { tool: string; outcome: string }) => row.tool === 'memory_list' && row.outcome === 'success'));
+  assert(report.entries.some((row: { tool: string; outcome: string; status: number }) => row.tool === 'memory_write' && row.outcome === 'error' && row.status === 403));
+  const batch = report.entries.find((row: { rpc_method: string }) => row.rpc_method === '(batch)');
+  assert.equal(batch.outcome, 'error');
+  assert.deepEqual(batch.details.rpc_batch.map((item: { tool: string; error?: string }) => [item.tool, item.error]),
+    [['memory_context', undefined], ['memory_write', 'insufficient_scope']]);
+  assert.equal(batch.details.rpc_batch[0].returned_count, 0);
+  assert(batch.details.rpc_batch[0].tool_duration_ms >= 0);
+  assert.equal(batch.details.rpc_batch[1].returned_count, undefined);
+  assert(report.buckets?.some((bucket: { outcome: string; count: number }) => bucket.outcome === 'error' && bucket.count >= 2));
+  for (const value of [query, rotation.token, issued.token, '198.51.100.11']) assert(!JSON.stringify(report).includes(value));
+  const errors = await readAudit(pool, { client, channel: 'mcp', outcome: 'error' });
+  assert.equal(errors.entries.length, 2);
+  const paged = client + '-page';
+  await pool.query(`INSERT INTO request_audit(request_id,started_at,channel,route,method,status,duration_ms,client_id,outcome,details)
+    SELECT gen_random_uuid(),now()-n*interval '1 second','rest','/v1/namespaces','GET',200,1,$1,'success','{}'
+    FROM generate_series(1,51) n ORDER BY n`, [paged]);
+  const firstPage = await readAudit(pool, { client: paged });
+  assert.equal(firstPage.entries.length, 50);
+  assert(Date.parse(firstPage.entries[0].started_at) > Date.parse(firstPage.entries[49].started_at));
+  assert(firstPage.until);
+  const lastPage = await readAudit(pool, { client: paged, before: firstPage.next, until: firstPage.until.toISOString() });
+  assert.equal(lastPage.entries.length, 1);
+  assert.equal(lastPage.next, null);
+  assert(Date.parse(firstPage.entries[49].started_at) > Date.parse(lastPage.entries[0].started_at));
 });
 
 test('审计关联可信来源、实际记忆变更、幂等重试和分页返回量', async () => {
@@ -261,23 +211,14 @@ test('审计关联可信来源、实际记忆变更、幂等重试和分页返�
   }
 });
 
-test('管理台密码会话在真实数据库完成读写、版本冲突、来源历史和删除', async () => {
-  const password = 'synthetic-admin-integration-passphrase';
-  const ui = createApp({ cfg: { ...cfg, adminPassword: password }, store, qdrant, search: new Search(store, qdrant) });
-  const local = ui.listen(0, '127.0.0.1'); await once(local, 'listening');
-  const address = local.address(); assert(address && typeof address !== 'string');
-  const root = `http://127.0.0.1:${address.port}`;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', Origin: cfg.publicUrl, 'X-Uni-Memory-UI': '1' };
-  const post = (path: string, body: unknown) => fetch(`${root}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+test('管理权限的 Bearer 通过 REST 完成读写、版本冲突、来源历史和删除', async () => {
+  const post = (path: string, body: unknown) => request(path, admin, body);
   let memory: { id: string; version: number } | undefined;
   try {
-    const login = await post('/ui/login', { password }); assert.equal(login.status, 200);
-    headers.Cookie = login.headers.getSetCookie()[0]!.split(';')[0]!;
-    headers['X-CSRF-Token'] = (await login.json() as { csrf: string }).csrf;
-    const input = { ...fact(`synthetic.web.${randomUUID()}`), namespace: 'projects/ui-synthetic', tags: ['ui-test'] };
+    const input = { ...fact(`synthetic.admin.${randomUUID()}`), namespace: 'projects/admin-synthetic', tags: ['admin-test'] };
     const created = await post('/v1/memories', input); assert.equal(created.status, 201);
     const result = await created.json() as { memory: { id: string; version: number; sources: { client_id: string }[] } };
-    memory = result.memory; assert.equal(result.memory.sources[0]!.client_id, 'web-admin');
+    memory = result.memory; assert.equal(result.memory.sources[0]!.client_id, 'admin-test');
     const list = await post('/v1/memories/list', { namespaces: [input.namespace] }); assert.equal(list.status, 200);
     assert((await list.json() as { memories: { id: string }[] }).memories.some(item => item.id === memory!.id));
     const update = await post('/v1/memories', { ...input, content: '合成 UI 修改后的事实。', expected_version: memory.version, idempotency_key: randomUUID() });
@@ -285,21 +226,18 @@ test('管理台密码会话在真实数据库完成读写、版本冲突、来�
     assert.equal(memory.version, 2);
     const stale = await post('/v1/memories', { ...input, content: '合成旧版本修改。', expected_version: 1, idempotency_key: randomUUID() });
     assert.equal(stale.status, 409);
-    const events = await fetch(`${root}/v1/memories/history?id=${memory.id}`, { headers });
+    const events = await request(`/v1/memories/history?id=${memory.id}`, admin);
     assert.equal((await events.json() as unknown[]).length, 2);
     const removed = await post('/v1/memories/delete', { id: memory.id, expected_version: memory.version, idempotency_key: randomUUID() });
     assert.equal(removed.status, 200);
-    assert.equal((await fetch(`${root}/v1/memories?id=${memory.id}`, { headers })).status, 404);
+    assert.equal((await request(`/v1/memories?id=${memory.id}`, admin)).status, 404);
     assert.equal((await pool.query('SELECT 1 FROM memory_events WHERE memory_id=$1 UNION ALL SELECT 1 FROM memory_sources WHERE memory_id=$1', [memory.id])).rowCount, 0);
     memory = undefined;
-    assert.equal((await post('/ui/logout', {})).status, 204);
-    assert.equal((await fetch(`${root}/v1/namespaces`, { headers })).status, 401);
   } finally {
     if (memory) {
       const current = await store.get({ id: memory.id });
-      await store.delete('web-admin', { id: current.id, expected_version: current.version, idempotency_key: randomUUID() });
+      await store.delete('admin-test', { id: current.id, expected_version: current.version, idempotency_key: randomUUID() });
     }
-    await new Promise<void>(resolve => { local.close(() => resolve()); local.closeAllConnections(); });
   }
 });
 
@@ -352,7 +290,7 @@ test('启动阶段 OAuth 配置失败时关闭已创建的推理线程并退出'
   // 不阻塞测试 HTTP 服务的事件循环，避免子进程运行期间 keep-alive 连接失效。
   const child = spawn(process.execPath, [fileURLToPath(new URL('../src/main.js', import.meta.url))], {
     env: { ...process.env, DATABASE_URL: connection, PUBLIC_URL: 'http://127.0.0.1:3000',
-      EMBEDDING_MODEL: 'gemma2', EMBEDDING_DTYPE: 'q4', OAUTH_ENABLED: 'true', OWNER_PASSWORD_HASH: '', OAUTH_COOKIE_KEY: '' },
+      EMBEDDING_MODEL: 'gemma2', EMBEDDING_DTYPE: 'q4', OAUTH_ENABLED: 'true', DEPLOYMENT_TOKEN: '', OAUTH_COOKIE_KEY: '' },
     stdio: ['ignore', 'ignore', 'pipe'], timeout: 15000,
   });
   let stderr = '';
@@ -932,7 +870,7 @@ test('整理 API 只发送所选当前事实，返回建议不写库，并处理
   } finally { await new Promise<void>(resolve => { mock.close(() => resolve()); mock.closeAllConnections(); }); }
 });
 
-test('OAuth 实际授权码/PKCE、登录 CSRF、资源和回调校验、刷新轮换与授权撤销', async () => {
+test('OAuth 部署令牌、独立客户端、授权码与 PKCE、拒绝、刷新轮换和撤销', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'uni-memory-oauth-'));
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const jwksPath = join(directory, 'jwks.json');
@@ -940,9 +878,13 @@ test('OAuth 实际授权码/PKCE、登录 CSRF、资源和回调校验、刷新�
   const oauthServer = createServer(); oauthServer.listen(0, '127.0.0.1'); await once(oauthServer, 'listening');
   const address = oauthServer.address(); assert(address && typeof address !== 'string');
   const origin = `http://127.0.0.1:${address.port}`;
-  const password = 'synthetic-test-password-long';
-  const settings = { ...cfg, publicUrl: origin, resource: `${origin}/mcp`, allowedOrigins: [origin], ownerHash: passwordHash(password), cookieKey: randomBytes(32).toString('hex'), jwksPath,
-    oauthClients: JSON.stringify([{ client_id: 'synthetic-chatgpt', redirect_uris: [`${origin}/callback`], token_endpoint_auth_method: 'none' }]) };
+  const deploymentToken = randomBytes(32).toString('base64url');
+  const settings = { ...cfg, publicUrl: origin, resource: `${origin}/mcp`, allowedOrigins: [origin],
+    deploymentToken, cookieKey: randomBytes(32).toString('hex'), jwksPath,
+    oauthClients: JSON.stringify([
+      { client_id: 'synthetic-chatgpt', redirect_uris: [`${origin}/callback`] },
+      { client_id: 'synthetic-second', application_type: 'native', redirect_uris: ['http://127.0.0.1/callback'] },
+    ]) };
   const provider = await createOAuth(pool, settings);
   oauthServer.on('request', createApp({ cfg: settings, store, qdrant, provider, search: new Search(store, qdrant) }));
   const jar = new Map<string, string>();
@@ -954,14 +896,20 @@ test('OAuth 实际授权码/PKCE、登录 CSRF、资源和回调校验、刷新�
     }
     return response;
   }
-  async function authorize(verifier: string) {
-    const params = new URLSearchParams({ client_id: 'synthetic-chatgpt', redirect_uri: `${origin}/callback`, response_type: 'code', scope: 'openid offline_access memory:read memory:write',
+  async function authorize(verifier: string, clientId = 'synthetic-chatgpt', decision = 'allow') {
+    const params = new URLSearchParams({ client_id: clientId, redirect_uri: `${origin}/callback`, response_type: 'code', scope: 'offline_access memory:read',
       code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', resource: settings.resource, state: 'synthetic-state', prompt: 'consent' });
     let response = await http(`/oauth/auth?${params}`);
     for (let i = 0; i < 12; i++) {
       const location = response.headers.get('location');
       if (location?.startsWith(`${origin}/callback`)) {
         const callback = new URL(location); assert.equal(callback.searchParams.get('state'), 'synthetic-state');
+        assert.equal(callback.searchParams.get('iss'), `${origin}/oauth`);
+        if (decision === 'deny') {
+          assert.equal(callback.searchParams.get('error'), 'access_denied');
+          assert.equal(callback.searchParams.get('code'), null);
+          return '';
+        }
         assert(callback.searchParams.get('code'), await response.text()); return callback.searchParams.get('code')!;
       }
       assert(location, `OAuth missing redirect: ${response.status} ${await response.text()}`);
@@ -969,10 +917,13 @@ test('OAuth 实际授权码/PKCE、登录 CSRF、资源和回调校验、刷新�
       if (response.status === 200 && new URL(location, origin).pathname.startsWith('/interaction/')) {
         const html = await response.text();
         const csrf = /name="csrf" value="([a-f0-9]+)"/.exec(html)?.[1]; assert(csrf);
-        if (html.includes('name="password"')) {
-          const rejected = await http(location, new URLSearchParams({ csrf: 'wrong', password })); assert.equal(rejected.status, 403);
+        if (html.includes('name="deployment_token"')) {
+          const rejected = await http(location, new URLSearchParams({ csrf: 'wrong', deployment_token: deploymentToken }));
+          assert.equal(rejected.status, 403);
+          response = await http(location, new URLSearchParams({ csrf, deployment_token: deploymentToken }));
+        } else {
+          response = await http(location, new URLSearchParams({ csrf, decision }));
         }
-        response = await http(location, new URLSearchParams({ csrf, password }));
       }
     }
     throw new Error('OAuth redirect loop');
@@ -983,28 +934,47 @@ test('OAuth 实际授权码/PKCE、登录 CSRF、资源和回调校验、刷新�
     const canonicalMetadata = await http('/.well-known/oauth-authorization-server/oauth');
     assert.equal(canonicalMetadata.status, 200);
     assert.deepEqual(await canonicalMetadata.json(), metadata);
+    const unauthenticated = await http('/mcp');
+    const resourceMetadata = unauthenticated.headers.get('www-authenticate');
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(resourceMetadata, `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`);
+    assert.deepEqual((await (await http('/.well-known/oauth-protected-resource/mcp')).json()).authorization_servers, [`${origin}/oauth`]);
     const badCallback = await http(`/oauth/auth?${new URLSearchParams({ client_id: 'synthetic-chatgpt', redirect_uri: 'https://attacker.invalid', response_type: 'code', scope: 'openid' })}`);
     assert.equal(badCallback.status, 400);
     const badResource = await http(`/oauth/auth?${new URLSearchParams({ client_id: 'synthetic-chatgpt', redirect_uri: `${origin}/callback`, response_type: 'code', scope: 'openid', resource: 'https://attacker.invalid', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256' })}`);
     const badLocation = badResource.headers.get('location');
     assert(badResource.status === 400 || badLocation?.includes('error='));
     const verifier = randomBytes(48).toString('base64url');
+    await authorize(verifier, 'synthetic-second', 'deny');
     const code = await authorize(verifier);
     const params = new URLSearchParams({ grant_type: 'authorization_code', client_id: 'synthetic-chatgpt', redirect_uri: `${origin}/callback`, code, code_verifier: verifier, resource: settings.resource });
     const tokenResponse = await http('/oauth/token', params);
     const tokens = await tokenResponse.json(); assert.equal(tokenResponse.status, 200, JSON.stringify(tokens));
     assert(tokens.refresh_token);
+    assert.equal(tokens.token_type.toLowerCase(), 'bearer');
+    assert(!tokens.id_token);
     const call = await fetch(`${origin}/v1/memories/core?namespaces=global`, { headers: { Authorization: `Bearer ${tokens.access_token}` } }); assert.equal(call.status, 200);
     const replay = await http('/oauth/token', params); assert.equal(replay.status, 400);
+    const secondCode = await authorize(verifier, 'synthetic-second');
+    const secondParams = new URLSearchParams({ ...Object.fromEntries(params), code: secondCode, client_id: 'synthetic-second' });
+    const second = await (await http('/oauth/token', secondParams)).json();
+    assert(second.access_token);
+    assert.notEqual(second.access_token, tokens.access_token);
+    const secondAccess = await provider.AccessToken.find(second.access_token);
+    assert.equal(secondAccess?.clientId, 'synthetic-second');
     const wrongVerifierCode = await authorize(verifier);
     const wrong = await http('/oauth/token', new URLSearchParams({ ...Object.fromEntries(params), code: wrongVerifierCode, code_verifier: randomBytes(48).toString('base64url') })); assert.equal(wrong.status, 400);
     const freshCode = await authorize(verifier);
     const fresh = await (await http('/oauth/token', new URLSearchParams({ ...Object.fromEntries(params), code: freshCode }))).json();
     const refreshed = await (await http('/oauth/token', new URLSearchParams({ grant_type: 'refresh_token', client_id: 'synthetic-chatgpt', refresh_token: fresh.refresh_token, resource: settings.resource }))).json();
     assert(refreshed.access_token); assert(refreshed.refresh_token); assert.notEqual(refreshed.refresh_token, fresh.refresh_token);
-    const access = await provider.AccessToken.find(refreshed.access_token); assert(access?.grantId);
-    await pool.query("DELETE FROM oauth_state WHERE grant_id=$1 OR (model='Grant' AND id=$1)", [access.grantId]);
+    const unrelated = await http(metadata.revocation_endpoint, new URLSearchParams({ client_id: 'synthetic-second', token: refreshed.refresh_token }));
+    assert.equal(unrelated.status, 200);
+    assert.equal((await fetch(`${origin}/v1/memories/core?namespaces=global`, { headers: { Authorization: `Bearer ${refreshed.access_token}` } })).status, 200);
+    const revoked = await http(metadata.revocation_endpoint, new URLSearchParams({ client_id: 'synthetic-chatgpt', token: refreshed.refresh_token, token_type_hint: 'refresh_token' }));
+    assert.equal(revoked.status, 200);
     assert.equal((await fetch(`${origin}/v1/memories/core?namespaces=global`, { headers: { Authorization: `Bearer ${refreshed.access_token}` } })).status, 401);
+    assert.equal((await fetch(`${origin}/v1/memories/core?namespaces=global`, { headers: { Authorization: `Bearer ${second.access_token}` } })).status, 200);
   } finally {
     await new Promise<void>(resolve => { oauthServer.close(() => resolve()); oauthServer.closeAllConnections(); });
     await rm(directory, { recursive: true, force: true });

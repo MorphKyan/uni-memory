@@ -6,8 +6,6 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 COPY test ./test
-COPY web ./web
-COPY scripts/check-web.cjs ./scripts/check-web.cjs
 RUN npm run build
 
 FROM build AS test
@@ -26,7 +24,6 @@ WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 MODEL_CACHE=/models
 COPY --from=production-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist/src ./dist/src
-COPY --from=build --chown=node:node /app/dist/web ./dist/web
 COPY package.json ./
 COPY --from=build /app/src/schema ./src/schema
 RUN mkdir /models && chown node:node /models

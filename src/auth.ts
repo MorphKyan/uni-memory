@@ -1,44 +1,35 @@
-import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
-import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
+import type { AuthInfo } from '@modelcontextprotocol/server';
 import type { Pool } from 'pg';
 import type { RequestHandler } from 'express';
 import type Provider from 'oidc-provider';
 import { AppError } from './validation.js';
 
 export interface Identity { clientId: string; scopes: string[]; tokenId?: string }
-const passwordSalt = () => randomBytes(16).toString('hex');
-export function passwordHash(password: string) {
-  if (password.length < 16 || password.length > 1024) throw new Error('口令须为 16–1024 字符');
-  const salt = passwordSalt();
-  return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`;
+export class InsufficientScope extends AppError {
+  constructor(public scope: string) { super(403, 'insufficient_scope'); }
 }
-const scryptAsync = promisify(scrypt);
-let passwordChecks = 0;
-export async function derivePassword(password: string, salt: string) {
-  // 不排队堆积匿名登录请求，给数据库等工作留出线程池容量。
-  if (passwordChecks >= 2) throw new AppError(503, 'password_check_busy');
-  passwordChecks++;
-  try { return await scryptAsync(password, salt, 64) as Buffer; }
-  finally { passwordChecks--; }
-}
-export async function newPasswordHash(password: string) {
-  const salt = passwordSalt();
-  return `${salt}:${(await derivePassword(password, salt)).toString('hex')}`;
-}
-export async function passwordMatches(password: string, encoded: string) {
-  if (password.length > 1024) return false;
-  const [salt, hex] = encoded.split(':');
-  if (!salt || !hex || !/^[0-9a-f]{32}$/.test(salt) || !/^[0-9a-f]{128}$/.test(hex)) return false;
-  return timingSafeEqual(await derivePassword(password, salt), Buffer.from(hex, 'hex'));
+export function hasScope(identity: Identity, scope: string) {
+  return identity.scopes.includes(scope) || identity.scopes.includes('memory:admin');
 }
 export function requireScope(identity: Identity, scope: string) {
-  if (!identity.scopes.includes(scope) && !identity.scopes.includes('memory:admin')) throw new AppError(403, 'insufficient_scope');
+  if (!hasScope(identity, scope)) throw new InsufficientScope(scope);
 }
-export function authentication(pool: Pool, resource: string, provider?: Provider): RequestHandler {
+export function bearerChallenge(metadataUrl?: string, error?: 'invalid_token' | 'insufficient_scope', scope?: string) {
+  const parameters = [
+    error && `error="${error}"`,
+    scope && `scope="${scope}"`,
+    metadataUrl && `resource_metadata="${metadataUrl}"`,
+  ].filter(Boolean);
+  return parameters.length ? `Bearer ${parameters.join(', ')}` : 'Bearer';
+}
+export function authentication(pool: Pool, resource: string, provider?: Provider, metadataUrl?: string): RequestHandler {
   return async (req, res, next) => {
     try {
-      const token = /^Bearer ([A-Za-z0-9._~-]{20,4096})$/.exec(req.headers.authorization ?? '')?.[1];
-      if (!token) throw new AppError(401, 'authentication_required');
+      const authorization = req.headers.authorization;
+      if (!authorization) throw new AppError(401, 'authentication_required');
+      const token = /^Bearer +([A-Za-z0-9._~+/-]+=*)$/i.exec(authorization)?.[1];
+      if (!token || token.length > 4096) throw new AppError(401, 'invalid_token');
       const row = (await pool.query('SELECT id,client_id,scopes,revoked_at IS NULL AND expires_at>now() AS active FROM client_tokens WHERE token_hash=$1', [createHash('sha256').update(token).digest('hex')])).rows[0];
       if (row) res.locals.auditToken = { clientId: row.client_id, tokenId: row.id };
       let identity: Identity | undefined = row?.active ? { clientId: row.client_id, scopes: row.scopes, tokenId: row.id } : undefined;
@@ -51,10 +42,12 @@ export function authentication(pool: Pool, resource: string, provider?: Provider
       }
       if (!identity) throw new AppError(401, 'invalid_token');
       res.locals.identity = identity;
+      const auth: AuthInfo = { token, clientId: identity.clientId, scopes: identity.scopes, resourceMetadataUrl: metadataUrl };
+      Object.assign(req, { auth });
       next();
     } catch (error) {
       if (error instanceof AppError && error.status === 401) {
-        res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${new URL('/.well-known/oauth-protected-resource', resource)}"`);
+        res.setHeader('WWW-Authenticate', bearerChallenge(metadataUrl, error.code === 'invalid_token' ? 'invalid_token' : undefined));
       }
       next(error);
     }

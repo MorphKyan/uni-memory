@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { AppError, memorySelector, writeSchema, deleteSchema, searchSchema, namespacesSchema, listSchema } from './validation.js';
-import { requireScope, type Identity } from './auth.js';
+import { hasScope, requireScope, type Identity } from './auth.js';
 import type { Store } from './store.js';
 import type { Search } from './search.js';
 import { scopeSchema } from './scope.js';
@@ -10,7 +10,7 @@ import { sharedMemoryPolicy } from './policy.js';
 import type { MemoryStatus } from './status.js';
 import { summarizeMemoryResult, type ToolAudit } from './audit.js';
 
-export function createMcpServer(store: Store, search: Search, status: MemoryStatus, identity: Identity, audit?: (id: string | number, result: ToolAudit) => void) {
+export function createMcpServer(store: Store, search: Search, status: MemoryStatus, identity: Identity, challengeScopes: boolean, audit?: (id: string | number, result: ToolAudit) => void) {
   const server = new McpServer({ name: 'uni-memory', version: '0.3.2' }, {
     instructions: sharedMemoryPolicy,
   });
@@ -18,6 +18,11 @@ export function createMcpServer(store: Store, search: Search, status: MemoryStat
     server.registerTool(name, {
       description, inputSchema: schema,
       annotations: { readOnlyHint: scope === 'memory:read', destructiveHint: name === 'memory_delete', idempotentHint: true, openWorldHint: false },
+      scopeChallenge: ({ request }) => {
+        if (!challengeScopes || hasScope(identity, scope)) return;
+        audit?.(request.id, { error: 'insufficient_scope' });
+        return { scopes: [scope] };
+      },
       _meta: { securitySchemes: [{ type: 'oauth2', scopes: [scope] }] },
     }, async (input, context) => {
       const started = performance.now();

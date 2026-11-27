@@ -5,7 +5,7 @@ import { createMcpHandler } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type Provider from 'oidc-provider';
 import type { Config } from './config.js';
-import { authentication, requireScope, type Identity } from './auth.js';
+import { authentication, bearerChallenge, InsufficientScope, requireScope, type Identity } from './auth.js';
 import { mountOAuth } from './oauth.js';
 import { createMcpServer } from './mcp.js';
 import { AppError } from './validation.js';
@@ -14,7 +14,6 @@ import type { Search } from './search.js';
 import type { Qdrant } from './qdrant.js';
 import type { Embedder } from './embedding.js';
 import { MemoryStatus } from './status.js';
-import { mountAdmin } from './admin.js';
 import { auditRequests, summarizeMemoryResult, type MemoryAudit, type ToolAudit } from './audit.js';
 
 interface Services { store: Store; search: Search; qdrant: Qdrant; cfg: Config; provider?: Provider; embedder?: Embedder }
@@ -40,6 +39,8 @@ export function rateLimit(limit: number, windowMs = 60000): RequestHandler {
 export function createApp(services: Services) {
   const app = express();
   const { cfg, store, search, qdrant, provider } = services;
+  const metadataPath = '/.well-known/oauth-protected-resource/mcp';
+  const metadataUrl = provider && new URL(metadataPath, cfg.publicUrl).href;
   const status = new MemoryStatus(store, qdrant, services.embedder);
   app.disable('x-powered-by');
   app.set('query parser', 'simple');
@@ -68,13 +69,13 @@ export function createApp(services: Services) {
     try { await qdrant.request('/collections'); vectors = true; } catch { /* 启动或故障中 */ }
     res.status(database && vectors ? 200 : 503).json({ database, qdrant: vectors, embedding_configured: !!cfg.model });
   });
-  app.get(['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp'], (_req, res) => {
-    res.json({ resource: cfg.resource, authorization_servers: provider ? [`${cfg.publicUrl}/oauth`] : [], scopes_supported: ['memory:read', 'memory:write'], bearer_methods_supported: ['header'] });
-  });
-  if (provider) mountOAuth(app, provider, cfg);
-  app.use('/v1', mountAdmin(app, cfg, store.pool, rateLimit(5)));
-  const auth = authentication(store.pool, cfg.resource, provider);
-  app.use(['/v1', '/mcp'], (req, res, next) => res.locals.identity ? next() : auth(req, res, next), express.json({ limit: '32kb', strict: true }));
+  if (provider) {
+    app.get(['/.well-known/oauth-protected-resource', metadataPath], (_req, res) => {
+      res.json({ resource: cfg.resource, authorization_servers: [`${cfg.publicUrl}/oauth`], scopes_supported: ['memory:read', 'memory:write'], bearer_methods_supported: ['header'] });
+    });
+    mountOAuth(app, provider, cfg);
+  }
+  app.use(['/v1', '/mcp'], authentication(store.pool, cfg.resource, provider, metadataUrl), express.json({ limit: '32kb', strict: true }));
   function scope(name: string): RequestHandler {
     return (_req, res, next) => { requireScope(res.locals.identity as Identity, name); next(); };
   }
@@ -127,7 +128,8 @@ export function createApp(services: Services) {
   app.post('/mcp', async (req, res) => {
     const results = new Map<string | number, ToolAudit>();
     res.locals.auditToolResults = results;
-    const handler = createMcpHandler(() => createMcpServer(store, search, status, res.locals.identity, (id, result) => results.set(id, result)));
+    // 旧版批量请求仍可逐条返回工具结果，现代单请求使用 HTTP 权限质询。
+    const handler = createMcpHandler(() => createMcpServer(store, search, status, res.locals.identity, !Array.isArray(req.body), (id, result) => results.set(id, result)));
     try {
       const work = toNodeHandler(handler)(req, res, req.body);
       res.locals.auditWork = work;
@@ -144,6 +146,9 @@ export function createApp(services: Services) {
         : (error as { type?: string }).type === 'entity.too.large' ? { status: 413, code: 'request_too_large' }
           : { status: 500, code: 'internal_error' };
     res.locals.auditError = code;
+    if (error instanceof InsufficientScope) {
+      res.setHeader('WWW-Authenticate', bearerChallenge(metadataUrl, 'insufficient_scope', error.scope));
+    }
     res.status(status).json({ error: code });
   };
   app.use(errors);

@@ -12,7 +12,9 @@ docker compose exec -T app node dist/src/cli.js token-create my-client memory:re
 
 在客户端的 MCP 设置中添加服务入口，通过私密配置发送 `Authorization: Bearer` 请求头。令牌默认有效 90 天。
 
-如需 OAuth：设置服务的 HTTPS 入口与 `OAUTH_ENABLED=true`，在 `OAUTH_CLIENTS_JSON` 中登记客户端 ID、客户端提供的回调地址及认证方式。客户端使用服务的 OAuth 元数据发现授权与令牌端点。
+如需 OAuth，设置服务的 HTTPS 入口、`OAUTH_ENABLED=true` 和私密 `DEPLOYMENT_TOKEN`，在 `OAUTH_CLIENTS_JSON` 中登记客户端 ID、回调地址及认证方式。公有客户端使用 `token_endpoint_auth_method: "none"`。本机原生客户端需要动态回调端口时，可用 `application_type: "native"` 登记 IP loopback 回调。
+
+客户端从 `/.well-known/oauth-protected-resource/mcp` 和 `/.well-known/oauth-authorization-server/oauth` 发现授权服务器，用 `response_type=code`、PKCE `S256` 和指向服务 `/mcp` 的 `resource` 发起授权。授权时在 uni-memory 页面输入部署令牌并确认权限。换码时，客户端将授权码、`code_verifier`、原 `redirect_uri` 和 `resource` 提交到令牌端点。需要刷新时请求 `offline_access`，每次刷新使用新返回的刷新令牌。
 
 ## Codex
 

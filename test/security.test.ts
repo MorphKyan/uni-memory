@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { passwordHash, passwordMatches, derivePassword, requireScope } from '../src/auth.js';
+import { requireScope } from '../src/auth.js';
 import { rejectSecrets, writeSchema } from '../src/validation.js';
 import { config } from '../src/config.js';
 import { fuse } from '../src/search.js';
@@ -14,12 +15,7 @@ import { errors } from 'oidc-provider';
 import { organize } from '../src/organize.js';
 import type { Store } from '../src/store.js';
 
-test('scrypt、权限与公网 URL 校验', async () => {
-  const password = 'a-synthetic-long-passphrase';
-  const hash = passwordHash(password);
-  assert(await passwordMatches(password, hash));
-  assert(!await passwordMatches('wrong', hash));
-  assert(!await passwordMatches(password, 'invalid'));
+test('权限与公网 URL 校验', () => {
   assert.throws(() => requireScope({ clientId: 'r', scopes: ['memory:read'] }, 'memory:write'));
   assert.doesNotThrow(() => requireScope({ clientId: 'a', scopes: ['memory:admin'] }, 'memory:write'));
   assert.throws(() => config({ PUBLIC_URL: 'http://public.example' }));
@@ -51,9 +47,9 @@ test('请求频率超限返回 429 和 Retry-After', async () => {
   } finally { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); }
 });
 
-test('OAuth 表单保留同源 Origin，继续拒绝空来源、跨源和错误 CSRF', async () => {
-  const password = 'synthetic-form-login-password';
-  const cfg = config({ OWNER_PASSWORD_HASH: passwordHash(password) });
+test('OAuth 表单校验部署令牌、同源 Origin 和 CSRF', async () => {
+  const deploymentToken = 'synthetic-oauth-deployment-token-only';
+  const cfg = config({ DEPLOYMENT_TOKEN: deploymentToken });
   let completed = false;
   const provider = {
     interactionDetails: async () => {
@@ -77,11 +73,14 @@ test('OAuth 表单保留同源 Origin，继续拒绝空来源、跨源和错误 
     const page = await fetch(url);
     assert.equal(page.headers.get('referrer-policy'), 'same-origin');
     const cookie = page.headers.getSetCookie()[0]!.split(';')[0]!;
-    const csrf = /name="csrf" value="([a-f0-9]+)"/.exec(await page.text())![1]!;
-    const submit = (origin: string, value = csrf) => fetch(url, { method: 'POST',
-      headers: { Origin: origin, Cookie: cookie }, body: new URLSearchParams({ csrf: value, password }) });
+    const html = await page.text();
+    const csrf = /name="csrf" value="([a-f0-9]+)"/.exec(html)![1]!;
+    assert(html.includes('name="deployment_token"') && !html.includes(deploymentToken));
+    const submit = (origin: string, value = csrf, token = deploymentToken) => fetch(url, { method: 'POST',
+      headers: { Origin: origin, Cookie: cookie }, body: new URLSearchParams({ csrf: value, deployment_token: token }) });
     for (const origin of ['null', 'https://attacker.invalid']) assert.equal((await submit(origin)).status, 403);
     assert.equal((await submit(cfg.publicUrl, 'wrong')).status, 403);
+    assert.equal((await submit(cfg.publicUrl, csrf, 'x'.repeat(32))).status, 401);
     assert.equal((await submit(cfg.publicUrl)).status, 204);
     const repeated = await submit(cfg.publicUrl);
     assert.equal(repeated.status, 400);
@@ -92,6 +91,7 @@ test('OAuth 表单保留同源 Origin，继续拒绝空来源、跨源和错误 
 test('写入输入严格、凭据拒绝与 RRF 去重', () => {
   assert.throws(() => writeSchema.parse({ key: 'x', content: 'x', client_id: 'fake' }));
   assert.throws(() => rejectSecrets({ content: 'api_key=synthetic-credentials' }));
+  assert.throws(() => rejectSecrets({ content: 'DEPLOYMENT_TOKEN=synthetic-credentials' }));
   assert.doesNotThrow(() => rejectSecrets({ content: '用户希望密钥只放环境变量。' }));
   assert.deepEqual(fuse([['a', 'b', 'a'], ['b', 'c']], 3), ['b', 'a', 'c']);
 });
@@ -102,7 +102,7 @@ test('本机地址例外仅允许 HTTP，不接受其他协议', async () => {
   for (const protocol of ['ftp:', 'file:', 'ws:']) {
     const url = `${protocol}//localhost/callback`;
     await assert.rejects(createOAuth({} as Pool, config({
-      OWNER_PASSWORD_HASH: 'synthetic', OAUTH_COOKIE_KEY: 'x'.repeat(32),
+      DEPLOYMENT_TOKEN: 'x'.repeat(32), OAUTH_COOKIE_KEY: 'y'.repeat(32),
       OAUTH_CLIENTS_JSON: JSON.stringify([{ client_id: 'synthetic', redirect_uris: [url] }]),
     })), /回调地址必须使用 HTTPS 或本机 HTTP/);
     await assert.rejects(organize(store, config({
@@ -111,13 +111,73 @@ test('本机地址例外仅允许 HTTP，不接受其他协议', async () => {
   }
 });
 
-test('密码校验并发有界，繁忙时不堆积任务，完成后释放容量', async () => {
-  const first = derivePassword('synthetic-password', 'synthetic-salt');
-  const second = derivePassword('synthetic-password', 'synthetic-salt');
-  await assert.rejects(derivePassword('synthetic-password', 'synthetic-salt'), { status: 503, code: 'password_check_busy' });
-  const [a, b] = await Promise.all([first, second]);
-  assert.deepEqual(a, b);
-  assert.deepEqual(await derivePassword('synthetic-password', 'synthetic-salt'), a);
+test('OAuth 要求在部署环境配置有效令牌', async () => {
+  for (const value of [undefined, 'short', '片段'.repeat(32)]) {
+    await assert.rejects(createOAuth({} as Pool, config({
+      DEPLOYMENT_TOKEN: value, OAUTH_COOKIE_KEY: 'y'.repeat(32),
+    })), /DEPLOYMENT_TOKEN/);
+  }
+});
+
+test('管理台入口已移除，独立 Bearer 仍可访问且权限不足触发质询', async () => {
+  const deploymentToken = 'synthetic-deployment-token-for-authorization';
+  const reader = 'synthetic-static-bearer-read-client';
+  const writer = 'synthetic-static-bearer-write-client';
+  const makeRecord = (token: string, client_id: string, scopes: string[]) => [
+    createHash('sha256').update(token).digest('hex'), { id: client_id, client_id, scopes, active: true },
+  ] as const;
+  const records = new Map([
+    makeRecord(reader, 'synthetic-reader', ['memory:read']),
+    makeRecord(writer, 'synthetic-writer', ['memory:read', 'memory:write']),
+  ]);
+  const actors: string[] = [];
+  const app = createApp({
+    cfg: config({ DEPLOYMENT_TOKEN: deploymentToken }),
+    store: {
+      pool: { query: async (sql: string, args: string[]) => ({
+        rows: sql.includes('FROM client_tokens') ? [records.get(args[0]!)] : [],
+      }) },
+      write: async (clientId: string) => { actors.push(clientId); return { status: 'created' }; },
+    },
+    provider: {
+      callback: () => (_req: express.Request, res: express.Response) => res.status(404).end(),
+      AccessToken: { find: async () => undefined },
+    },
+    search: {}, qdrant: {},
+  } as unknown as Parameters<typeof createApp>[0]);
+  const server = app.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    const address = server.address(); assert(address && typeof address !== 'string');
+    const base = `http://127.0.0.1:${address.port}`;
+    assert.equal((await fetch(base)).status, 404);
+    assert.equal((await fetch(`${base}/ui/login`, { method: 'POST' })).status, 404);
+    assert.equal((await fetch(`${base}/v1/tasks`, { headers: { Cookie: 'uni_memory_admin=synthetic' } })).status, 401);
+    const input = { namespace: 'global', key: 'synthetic.auth', type: 'fact', content: '合成事实', source: { reference: 'synthetic:test' }, idempotency_key: 'synthetic-auth-test' };
+    const mcp = (token: string) => fetch(`${base}/mcp`, {
+      method: 'POST', headers: {
+        Authorization: `bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream',
+        'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'tools/call', 'Mcp-Name': 'memory_write',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+        params: { name: 'memory_write', arguments: input, _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {},
+        } },
+      }),
+    });
+    const invalid = await mcp(deploymentToken);
+    assert.equal(invalid.status, 401);
+    assert.match(invalid.headers.get('www-authenticate') ?? '', /error="invalid_token".*resource_metadata="/);
+    const denied = await mcp(reader);
+    assert.equal(denied.status, 403);
+    const challenge = denied.headers.get('www-authenticate') ?? '';
+    assert.match(challenge, /error="insufficient_scope"/);
+    assert.match(challenge, /scope="memory:write"/);
+    assert.match(challenge, /resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource\/mcp"/);
+    const allowed = await mcp(writer);
+    assert.equal(allowed.status, 200);
+    assert.equal((await allowed.json()).result.isError, undefined);
+    assert.deepEqual(actors, ['synthetic-writer']);
+  } finally { await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); }); }
 });
 
 test('代理 Host 不影响应用；非可信来源不能伪造 OAuth HTTPS', async () => {

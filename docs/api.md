@@ -1,6 +1,6 @@
 # 服务接口
 
-客户端 `/v1` 与 `/mcp` 请求使用 `Authorization: Bearer ...`。浏览器管理台可用管理员密码登录后通过 Cookie 会话调用 `/v1`，POST 需附带会话 CSRF Token。Cookie 不用于 `/mcp`。记忆操作的身份由服务端确定，请求中不接受 `client_id`。`memory:admin` 包含读写权限。管理台接口与部署见 [管理台](admin-ui.md)。
+客户端 `/v1` 与 `/mcp` 请求使用 `Authorization: Bearer ...`，接受 OAuth 签发给本服务的访问令牌或 CLI 签发的静态令牌。记忆操作的身份由服务端根据令牌确定。`memory:admin` 包含读写权限。令牌及审计管理使用部署侧 CLI。详见 [部署与运维](operations.md)。
 
 | REST | 权限 | MCP |
 | --- | --- | --- |
@@ -17,7 +17,7 @@
 
 MCP 使用无状态 Streamable HTTP，`POST /mcp` 返回 JSON；未启用独立 GET SSE 通道，GET/DELETE 返回 405。SDK 客户端以 tools/list、tools/call 使用工具。
 
-管理台的 `/ui/password`、`/ui/bearers`、`/ui/bearers/:id/:action` 和 `/ui/audit` 需要管理员 Cookie 会话及 `X-Uni-Memory-UI: 1`。写操作还要求 `X-CSRF-Token`。Bearer 令牌持有者通过现有客户端接口访问服务。
+无有效令牌返回 HTTP `401` 和 Bearer 质询，OAuth 启用时质询包含受保护资源元数据 URL。REST 与 MCP 单次工具调用缺少权限时，返回 HTTP `403` 和 `WWW-Authenticate`，包含 `error="insufficient_scope"` 与本次调用需要的 `scope`。
 
 ## 写入
 
