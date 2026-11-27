@@ -1,0 +1,18 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "uni-memory",
+  "displayName": "Uni Memory",
+  "version": "0.3.2",
+  "description": "Shared long-term memory rules, skill, and SessionStart hook for uni-memory MCP.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Check shared memory overview and status for this project",
+    "Search my shared memory preferences and past decisions",
+    "Save a stable project decision to shared memory"
+  ],
+  "author": {
+    "name": "MorphKyan"
+  },
+  "repository": "https://github.com/MorphKyan/uni-memory",
+  "keywords": ["memory", "mcp", "shared-memory", "knowledge"]
+}

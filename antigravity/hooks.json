@@ -1,0 +1,11 @@
+{
+  "uni-memory-context": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "node ./scripts/uni-memory-context.cjs",
+        "timeout": 3
+      }
+    ]
+  }
+}
