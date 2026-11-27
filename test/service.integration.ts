@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { Client, InsufficientScopeError, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createPool } from '../src/db.js';
 import { migrate, readMigrations } from '../src/migrations.js';
 import { Store } from '../src/store.js';
@@ -648,8 +648,11 @@ test('MCP 2026 协议发现、九工具和调用保留认证与权限校验', as
   assert.equal(result.resultType, 'complete');
   assert(!result.isError);
   assert.equal(JSON.parse(result.content[0].text).database, 'ok');
-  const denied = (await (await call('tools/call', { name: 'memory_write', arguments: fact() })).json()).result;
-  assert(denied.isError);
+  const denied = await call('tools/call', { name: 'memory_write', arguments: fact() });
+  assert.equal(denied.status, 403);
+  const challenge = denied.headers.get('www-authenticate') ?? '';
+  assert.match(challenge, /error="insufficient_scope"/);
+  assert.match(challenge, /scope="memory:write"/);
 });
 
 test('SDK 客户端完成 MCP 握手、九个工具发现、读写及工具权限', async () => {
@@ -664,8 +667,12 @@ test('SDK 客户端完成 MCP 握手、九个工具发现、读写及工具权�
       const writeTool = list.tools.find(t => t.name === 'memory_write')!;
       for (const field of ['namespace', 'type']) assert(writeTool.inputSchema.required?.includes(field));
       assert(writeTool.inputSchema.properties?.device_tags);
-      const result = await client.callTool({ name: 'memory_write', arguments: { ...fact(), device_tags: ['MCP-Desk', 'mcp-laptop'] } });
-      assert.equal(!!result.isError, token === reader);
+      const write = client.callTool({ name: 'memory_write', arguments: { ...fact(), device_tags: ['MCP-Desk', 'mcp-laptop'] } });
+      if (token === reader) {
+        await assert.rejects(write, { name: InsufficientScopeError.name, requiredScope: 'memory:write' });
+      } else {
+        assert(!(await write).isError);
+      }
       const context = await client.callTool({ name: 'memory_context', arguments: { namespaces: ['global'] } }); assert(!context.isError);
       for (const [name, args] of [['memory_namespaces', {}], ['memory_list', { namespaces: ['global'], device_tags: ['MCP-Desk'], limit: 1 }]] as const) {
         assert.equal(list.tools.find(t => t.name === name)?.annotations?.readOnlyHint, true);
