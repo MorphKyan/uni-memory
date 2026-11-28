@@ -16,19 +16,84 @@ docker compose exec -T app node dist/src/cli.js token-create my-client memory:re
 
 客户端从 `/.well-known/oauth-protected-resource/mcp` 和 `/.well-known/oauth-authorization-server/oauth` 发现授权服务器，用 `response_type=code`、PKCE `S256` 和指向服务 `/mcp` 的 `resource` 发起授权。授权时在 uni-memory 页面输入部署令牌并确认权限。换码时，客户端将授权码、`code_verifier`、原 `redirect_uri` 和 `resource` 提交到令牌端点。需要刷新时请求 `offline_access`，每次刷新使用新返回的刷新令牌。
 
+## 内网优先，公网回退
+
+Codex、CodeBuddy 和 Antigravity 可以共用本地 stdio 启动器。仓库需已运行 `npm ci`。为启动器进程通过私密环境提供 `UNI_MEMORY_TOKEN`，令牌应允许访问同一 uni-memory 实例的两个入口。
+
+下面示例的脚本路径、域名、内网 IP 和端口需换成实际部署值。Windows 可用 `D:/path/to/uni-memory/scripts/mcp-fallback.mjs` 格式。内网端口默认 443，必须提供与公网域名匹配的可信 HTTPS 证书。
+
+启动器每次启动只发送一次无凭据的内网 `/readyz` 探测，等待最多 250 ms，随后沿用选中的入口。切换网络后，重新启动 MCP 子进程即可重新探测。已经发送的 MCP 请求不会跨入口重发。OAuth 继续通过客户端的远程 HTTPS 配置接入。
+
 ## Codex
 
 - **MCP 配置**：在 `~/.codex/config.toml` 配置 `[mcp_servers.uni_memory]`，使用 `url` 与 `bearer_token_env_var`（或 OAuth）。
 - **规则、Skill 与 Hook**：使用 `skills/shared-memory/SKILL.md` 与 `hooks/hooks.json`（支持 `SessionStart` 与 `SubagentStart`），通过 `node scripts/install-memory-policy.mjs --client codex` 安装，或用 `npm run plugin:build:agent -- --output /new/path/uni-memory-agent` 生成 `.codex-plugin`。详见 [Hook 说明](hooks.md)。
+
+启用回退时，在 `config.toml` 中替换该 MCP 的连接定义。
+
+```toml
+[mcp_servers.uni_memory]
+command = "node"
+args = [
+  "/path/to/uni-memory/scripts/mcp-fallback.mjs",
+  "--public-url", "https://memory.example.com/mcp",
+  "--lan-address", "192.168.1.10",
+  "--lan-port", "8443",
+]
+env_vars = ["UNI_MEMORY_TOKEN"]
+```
 
 ## CodeBuddy
 
 - **MCP 配置**：在 CodeBuddy 私密 MCP 配置中指向服务 `/mcp` 并配置 Bearer Token。
 - **规则、Skill 与 Hook**：使用 `skills/shared-memory/SKILL.md` 与 `hooks/hooks.json`（合并到 `settings.json`），在核实版本支持后通过 `node scripts/install-memory-policy.mjs --client codebuddy --hooks on` 安装，或用 `npm run plugin:build:agent` 生成 `.claude-plugin`。详见 [Hook 说明](hooks.md)。
 
+启用回退时，在 MCP 配置的 `mcpServers` 中使用以下定义。CodeBuddy CLI 会从启动环境展开 `${UNI_MEMORY_TOKEN}`。CodeBuddy IDE 的文档确认支持 `env`，可以在私密用户配置中通过它向脚本传入令牌。 [CodeBuddy CLI MCP 文档](https://www.codebuddy.ai/docs/zh/cli/mcp) · [CodeBuddy IDE MCP 文档](https://www.codebuddy.ai/docs/zh/ide/User-guide/MCP)
+
+```json
+{
+  "mcpServers": {
+    "uni_memory": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/path/to/uni-memory/scripts/mcp-fallback.mjs",
+        "--public-url", "https://memory.example.com/mcp",
+        "--lan-address", "192.168.1.10",
+        "--lan-port", "8443"
+      ],
+      "env": {
+        "UNI_MEMORY_TOKEN": "${UNI_MEMORY_TOKEN}"
+      }
+    }
+  }
+}
+```
+
 ## Antigravity
 
-Antigravity 仅支持 Streamable HTTP 远程 MCP，使用独立的插件与 Hook 格式（不复用 Codex / CodeBuddy 的 `hooks/hooks.json` 或 ChatGPT 的 `mcp.json`）。
+Antigravity 支持本地 stdio 和远程 Streamable HTTP。配置本地 MCP 时使用 `command` 和 `args`。Antigravity 使用独立的插件与 Hook 格式。 [Antigravity MCP 配置](https://antigravity.google/docs/mcp/#mcp-configuration-structure)
+
+启用回退时，在私密用户配置 `mcp_config.json` 中采用以下定义，用 `env` 给子进程传入令牌。示例中的占位值需替换为对应的私密令牌。
+
+```json
+{
+  "mcpServers": {
+    "uni_memory": {
+      "command": "node",
+      "args": [
+        "/path/to/uni-memory/scripts/mcp-fallback.mjs",
+        "--public-url", "https://memory.example.com/mcp",
+        "--lan-address", "192.168.1.10",
+        "--lan-port", "8443"
+      ],
+      "env": {
+        "UNI_MEMORY_TOKEN": "YOUR_API_TOKEN"
+      }
+    }
+  }
+}
+```
 
 ### MCP 配置（`mcp_config.json`）
 
